@@ -8,6 +8,9 @@ import { loadConfig, resolveRepo } from './config.js';
 import { Factory, RuleError } from './factory.js';
 import { GATES, ROLES, STATES, isRole, isState, type Gate, type Priority, type Role, type Ticket } from './lifecycle.js';
 import { GitHubCodeHost, type CodeHost } from './codehost.js';
+import { Dispatcher, Lock } from './dispatch.js';
+import { JsonlLog, logDir } from './logs.js';
+import { ClaudeRunner, DEFAULT_CLAUDE_ARGS, type AgentRunner } from './runner.js';
 import { init } from './init.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
@@ -28,7 +31,8 @@ Commands
          [--component C]... [--covers AC-1] [--priority p0..p3] [--risky | --not-risky]
   pr <id> --as builder [--title T] [--body-file F]   Open (or find) the PR for branch ticket-<id>
   diff <id>                               The diff of the ticket's PR
-  checks <id>                             CI checks of the PR's head commit; exit 3 if any failed, 4 if pending or none yet
+  checks <id>                             CI checks of the PR's head commit, and whether it is merged;
+                                          exit 3 if any failed, 4 if pending or none yet
   move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
@@ -36,6 +40,9 @@ Commands
   evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
   close-spec <id> --as R
+  dispatch [--dry-run] [--max-runs N] [--watch [--interval SECONDS]]
+                                          Run the agents ticket by ticket until a PR needs
+                                          merging, a ticket needs a human, or nothing can move
 
 Commands that read GitHub use the REST API only, so they work where GraphQL is blocked.
 
@@ -51,7 +58,7 @@ interface Args {
   flags: Map<string, string[]>;
 }
 
-const BOOLEAN_FLAGS = new Set(['risky', 'not-risky', 'json', 'all', 'help', 'force', 'comments']);
+const BOOLEAN_FLAGS = new Set(['risky', 'not-risky', 'json', 'all', 'help', 'force', 'comments', 'dry-run', 'watch']);
 
 export function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -121,6 +128,8 @@ function summary(t: Ticket): string {
 export interface Deps {
   tracker?: Tracker;
   codeHost?: CodeHost;
+  runner?: AgentRunner;
+  logDir?: string;
   out?: (s: string) => void;
   cwd?: string;
 }
@@ -146,7 +155,13 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
   const repo = () => resolveRepo(flag(a, 'repo'), config, deps.cwd);
   const tracker = deps.tracker ?? new GitHubTracker(repo());
   const codeHost = deps.codeHost ?? (deps.tracker ? undefined : new GitHubCodeHost(repo()));
-  const factory = new Factory(tracker, { maxRounds: config.maxRounds, codeHost, baseBranch: config.base });
+  const log = deps.logDir || !deps.tracker ? new JsonlLog(deps.logDir ?? logDir(repo())) : undefined;
+  const factory = new Factory(tracker, {
+    maxRounds: config.maxRounds,
+    codeHost,
+    baseBranch: config.base,
+    onEvent: (e) => log?.write('events', e),
+  });
   const body = () => {
     const file = flag(a, 'body-file');
     return file ? readFileSync(resolve(deps.cwd ?? process.cwd(), file), 'utf8') : flag(a, 'body');
@@ -239,7 +254,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       const { checks } = result;
       if (json) out(JSON.stringify(result, null, 2));
       else {
-        out(`PR #${result.pr} at ${result.headSha}`);
+        out(`PR #${result.pr} at ${result.headSha}${result.merged ? ' (merged)' : result.state === 'closed' ? ' (closed)' : ''}`);
         out(
           checks.length
             ? checks.map((c) => `${(c.conclusion ?? c.status).padEnd(10)} ${c.name}${c.runId ? `  run ${c.runId}` : ''}  ${c.url}`).join('\n')
@@ -332,6 +347,49 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     case 'close-spec':
       print(await factory.closeSpec(id(rest[0]), role(a)));
       return 0;
+
+    case 'dispatch': {
+      if (!codeHost) throw new UsageError('dispatch needs a code host');
+      const cwd = deps.cwd ?? process.cwd();
+      const dispatcher = new Dispatcher({
+        tracker,
+        factory,
+        codeHost,
+        runner: deps.runner ?? new ClaudeRunner('claude', config.claudeArgs ?? DEFAULT_CLAUDE_ARGS),
+        cwd,
+        log,
+        out,
+      });
+      const dryRun = flag(a, 'dry-run') === 'true';
+      const maxRuns = flag(a, 'max-runs');
+      const interval = flag(a, 'interval');
+      const lock = dryRun ? undefined : new Lock(`${deps.logDir ?? logDir(repo())}/dispatch.lock`);
+      lock?.acquire();
+      try {
+        const r = await dispatcher.run({
+          dryRun,
+          maxRuns: maxRuns ? id(maxRuns, '--max-runs') : undefined,
+          watch: flag(a, 'watch') === 'true',
+          intervalMs: interval ? id(interval, '--interval') * 1000 : undefined,
+        });
+        if (json) out(JSON.stringify(r, null, 2));
+        else {
+          if (dryRun) {
+            const n = r.next;
+            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
+          } else {
+            out(`\n${r.runs.length} agent run(s); stopped: ${r.stoppedBy}`);
+            if (r.markedDone.length) out(`Done: ${r.markedDone.map((n) => `#${n}`).join(', ')}`);
+          }
+          if (r.toMerge.length) out(`Ready for you to merge: ${r.toMerge.map((n) => `#${n}`).join(', ')}`);
+          if (r.needsHuman.length) out(`Waiting on a human: ${r.needsHuman.map((n) => `#${n}`).join(', ')}`);
+          if (r.stuck.length) out(`Stuck (agent changed nothing): ${r.stuck.join(', ')}`);
+        }
+      } finally {
+        lock?.release();
+      }
+      return 0;
+    }
 
     default:
       throw new UsageError(`unknown command "${cmd}"`);

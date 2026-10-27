@@ -13,6 +13,8 @@ export interface Config {
   // Component name -> paths it owns. The planner tags tickets with these names, and the
   // reviewer checks that a PR only touches paths of its ticket's components.
   components: Record<string, string[]>;
+  // Extra flags for each `claude -p` agent run (default: see DEFAULT_CLAUDE_ARGS in runner.ts).
+  claudeArgs?: string[];
 }
 
 export const CONFIG_FILE = 'factory.config.yml';
@@ -40,6 +42,7 @@ export function loadConfig(dir = process.cwd()): Config {
     maxRounds,
     base: typeof raw.base === 'string' ? raw.base : 'main',
     components,
+    claudeArgs: Array.isArray(raw.claudeArgs) ? raw.claudeArgs.map(String) : undefined,
   };
 }
 

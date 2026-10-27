@@ -253,7 +253,7 @@ export class Factory {
   async checks(id: number) {
     const host = this.host();
     const pr = await host.getPr(await this.prOf(id));
-    return { pr: pr.number, headSha: pr.headSha, checks: await host.checks(pr.number) };
+    return { pr: pr.number, headSha: pr.headSha, merged: pr.merged, state: pr.state, checks: await host.checks(pr.number) };
   }
 
   private host(): CodeHost {

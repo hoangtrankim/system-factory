@@ -88,7 +88,7 @@ npx factory init --repo owner/name           # agents, grill skill, factory.conf
 npx factory setup                            # create the labels once
 ```
 
-Then, by hand until the dispatcher exists:
+In Claude Code, `/factory-grill` files a spec; then `factory dispatch` (below) works the tickets. Or, step by step:
 
 ```sh
 npx factory create --as grill --type spec --title "Todo app" --body-file spec.md
@@ -118,6 +118,38 @@ npx factory edit 2 --as planner --not-risky --note "Deleting your own todo is no
 Every GitHub call uses the REST API (`gh api`), never GraphQL, so it works on networks that block GraphQL; agent prompts use these commands instead of `gh issue` and `gh pr`.
 
 `--note-file` works anywhere `--note` does.
+
+### Dispatcher (phase 4)
+
+On the runner machine (the Mac mini), in the target repo:
+
+```sh
+factory dispatch --dry-run        # print the next step only
+factory dispatch                  # run agents until a PR needs merging, a ticket needs a human, or nothing can move
+factory dispatch --watch --interval 300   # keep going: picks up merges and new specs every 5 minutes
+```
+
+Each step comes from the routing table in `src/router.ts`. Rules are checked in order and the first match wins:
+
+1. A spec with uncovered criteria → planner (split).
+2. `in-qa` with a merged PR → marked done.
+3. `in-qa` with CI finished and no QA note for the head SHA → qa-reporter.
+4. Risky `in-review` without a passed gate → security.
+5. Other `in-review` → reviewer.
+6. `building` → builder.
+7. Ready by `factory next` → builder.
+8. `designed` without tests → qa-writer.
+9. `planned` → designer.
+10. A spec whose tickets are all done → planner (close).
+
+Each agent runs as its own `claude -p --agent factory-<role>` process and gets only the ticket number. If a run changes nothing, the dispatcher skips that agent and ticket until the ticket changes. It never merges. A lock file stops a second dispatcher from starting on the same repo.
+
+Logs are facts, not transcripts. They go to `~/.factory/logs/<owner>/<repo>/`, or `FACTORY_LOG_DIR` if set:
+
+- `events.jsonl`: every ticket change made through the CLI.
+- `runs.jsonl`: one line per agent run, with ticket, agent, rule, exit code, duration, cost, turns, session id and summary.
+
+Agent runs use `--permission-mode acceptEdits --allowedTools Bash` by default. Set `claudeArgs` in `factory.config.yml` to change that.
 
 The repo comes from `--repo`, then `FACTORY_REPO`, then `repo:` in `factory.config.yml`, then the `origin` remote. GitHub calls go through `gh api`, so run `gh auth login` first. A refused move exits with code 2 and says why.
 
