@@ -2,7 +2,9 @@
 
 An autonomous spec-to-PR workflow built on Claude Code. You agree a spec with the Grill. After that, agents split it into tickets, then design, test, build, review and QA each ticket, with one PR per ticket. Nobody reviews the PRs by hand: rules in code, a security gate for risky work, blind acceptance tests and CI decide.
 
-The idea comes from [Kiln](https://github.com/thuongdinh/kiln-software-factory): **judgement lives in prompts, rules live in code, state lives in the tracker.** Agents never edit labels themselves. They call the `factory` CLI, which refuses any move the rules don't allow.
+The idea comes from [Kiln](https://github.com/thuongdinh/kiln-software-factory): **judgement lives in prompts, rules live in code, state lives in the tracker.** Agents never edit labels themselves. They call the `forge` CLI, which refuses any move the rules don't allow.
+
+The command is called `forge`. The agents (`factory-*`), the labels (`factory:*`), `factory.config.yml` and the log folder keep the `factory` name.
 
 Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 
@@ -13,7 +15,7 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 | 1 | Rules CLI, labels, GitHub tracker adapter, unit tests | done |
 | 2 | Agent prompts: Grill, Planner, Designer, QA test writer, Builder, Security, Reviewer, QA reporter | done, tuned by two dry runs on [todo-app](https://github.com/hoangtrankim/todo-app) |
 | 3 | CI gate, branch protection and merge queue | next: until then the owner merges each PR |
-| 4 | `factory dispatch`: the loop that runs the agents, plus JSONL logs | done |
+| 4 | `forge dispatch`: the loop that runs the agents, plus JSONL logs | done |
 | 5 | Parallel slots, then retro and lessons from the logs | later |
 
 ## The workflow
@@ -32,8 +34,8 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 1. **Grill** (`/factory-grill` in Claude Code). It questions you one at a time, each with a suggested default, until every behaviour is testable. It writes the spec with numbered `AC-n` criteria and files it as a GitHub issue labelled `type:spec`.
 2. **Plan.** The planner splits the spec into PR-sized tickets. Each ticket names the criteria it covers, its components (from `factory.config.yml`), its priority and its blockers. Tickets touching the same component block each other so they never run at once. Risky tickets are marked `risky` (see below).
 3. **Design.** The designer writes a short design note on the ticket covering the public interface, test setup, files, approach and risks. The public interface names every control's role and accessible name, plus each route's status codes.
-4. **Blind tests.** The QA writer reads only the spec and the design note's public interface (`factory interface N`), never the code. It writes acceptance tests under `tests/acceptance/`, pushes them to branch `ticket-N`, and marks the ticket `tests-ready`. The builder can never change these tests.
-5. **Build.** In its own worktree on top of those tests, the builder makes them pass and adds its own tests. It opens the PR with `factory pr`. If an acceptance test is wrong, it sends the ticket back to the QA writer (`flawed-test`) rather than working around it.
+4. **Blind tests.** The QA writer reads only the spec and the design note's public interface (`forge interface N`), never the code. It writes acceptance tests under `tests/acceptance/`, pushes them to branch `ticket-N`, and marks the ticket `tests-ready`. The builder can never change these tests.
+5. **Build.** In its own worktree on top of those tests, the builder makes them pass and adds its own tests. It opens the PR with `forge pr`. If an acceptance test is wrong, it sends the ticket back to the QA writer (`flawed-test`) rather than working around it.
 6. **Security gate** (risky tickets only). A read-only security reviewer passes or fails the PR. A fail sends it back and costs a round. It also writes a risk note for the owner's weekly digest.
 7. **Review.** A read-only reviewer checks the PR against the spec, the design note, the ticket's components and the acceptance-test commits, and runs the tests. Blocking findings send the ticket back with a typed reason. Minor ones become **Follow-ups**.
 8. **QA.** The QA reporter reads CI on the PR's head commit and posts per-test evidence on the ticket. Red CI sends the ticket back.
@@ -49,29 +51,29 @@ A ticket sent back 3 times goes to `needs-human`. So does any question an agent 
 The runner is one machine (the Mac mini) with Node 22+, `git`, the GitHub CLI and Claude Code, all signed in.
 
 ```sh
-# once: the factory CLI (the repo is private, so link it from a clone)
+# once: the forge CLI (the repo is private, so link it from a clone)
 git clone https://github.com/hoangtrankim/system-factory && cd system-factory
 npm ci && npm run build && npm link
 
 # once per target repo
 cd ~/path/to/your-app
-factory init --repo owner/name      # agents + grill skill into .claude/, and factory.config.yml
-factory setup                       # create the labels
+forge init --repo owner/name        # agents + grill skill into .claude/, and factory.config.yml
+forge setup                         # create the labels
 ```
 
 Then, for each piece of work:
 
 1. In Claude Code in the target repo, run `/factory-grill` and agree the spec.
-2. In a terminal in the same repo, run `factory dispatch --watch`.
+2. In a terminal in the same repo, run `forge dispatch --watch`.
 3. Merge each PR when it is ready. The dispatcher prints them, and each ticket has the QA evidence. The dispatcher notices the merge and carries on.
 
-Check `factory dispatch --dry-run` at any time to see what would run next. `factory list --all` shows every ticket.
+Check `forge dispatch --dry-run` at any time to see what would run next. `forge list --all` shows every ticket.
 
 A step-by-step runbook for todo-app: https://claude.ai/artifact/CYF2fR38JET9qbkC4C5k9N
 
 ## The dispatcher
 
-`factory dispatch` reads the tickets, picks the next step from the routing table in `src/router.ts`, and runs that agent as its own process: `claude -p --agent factory-<role>`, given only the ticket number. It then reads the tickets again. The first matching rule wins:
+`forge dispatch` reads the tickets, picks the next step from the routing table in `src/router.ts`, and runs that agent as its own process: `claude -p --agent factory-<role>`, given only the ticket number. It then reads the tickets again. The first matching rule wins:
 
 1. A spec with uncovered criteria → planner (split).
 2. `in-qa` with a merged PR → the dispatcher marks it done.
@@ -103,9 +105,9 @@ Logs record facts, not transcripts. They go to `~/.factory/logs/<owner>/<repo>/`
 
 ## Agents
 
-Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `skills/`. `factory init` copies them into a project's `.claude/` folder. Every agent:
+Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `skills/`. `forge init` copies them into a project's `.claude/` folder. Every agent:
 
-- changes tickets only through `factory ... --as <its role>`;
+- changes tickets only through `forge ... --as <its role>`;
 - reads `lessons/<role>.md` if it exists;
 - writes its notes to `/tmp/factory/<role>-<N>.md`;
 - ends with a one-line report.
@@ -113,7 +115,7 @@ Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `s
 | Agent | Picks up | Does | Tools |
 | --- | --- | --- | --- |
 | Grill (skill) | an idea from the owner | grills the owner one question at a time, writes the spec, files it | main session |
-| `factory-planner` | a new spec, a blocked ticket, a finished spec | splits the spec into tickets; corrects them before building (`factory edit`); files follow-ups; closes the spec | read only |
+| `factory-planner` | a new spec, a blocked ticket, a finished spec | splits the spec into tickets; corrects them before building (`forge edit`); files follow-ups; closes the spec | read only |
 | `factory-designer` | `planned` | design note: public interface with test setup, files, approach, risks (must / should) | read + temp files |
 | `factory-qa-writer` | `designed` without tests | blind acceptance tests and the test setup they need, pushed to `ticket-N` | no `Grep` or `Edit`; never reads app code |
 | `factory-builder` | ready tickets and send-backs | builds in a worktree, opens the PR; never touches `tests/acceptance/` | full |
@@ -121,7 +123,7 @@ Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `s
 | `factory-reviewer` | `in-review` (after security on risky) | fresh review against spec, design and scope; runs the tests; blocking findings or follow-ups | read only, opus |
 | `factory-qa-reporter` | `in-qa` with CI finished | per-test evidence from CI; red CI goes back | read only |
 
-Read-only agents still have `Bash`, so they can run `factory`, `git` and tests. The prompts forbid writes. Guard hooks that block writes mechanically come later.
+Read-only agents still have `Bash`, so they can run `forge`, `git` and tests. The prompts forbid writes. Guard hooks that block writes mechanically come later.
 
 The contract test in `src/agents.test.ts` keeps the prompts honest. It checks that each agent acts only as its own role, names only real states and send-back reasons, never uses GraphQL `gh` commands, and keeps the flawed-test path.
 
@@ -174,28 +176,28 @@ All ticket access goes through the `Tracker` interface in `src/tracker/tracker.t
 Commands that change something need `--as <role>`. A refused change exits with code 2 and says why. `--note-file` works anywhere `--note` does.
 
 ```sh
-factory init [dir] [--force]                 # install agents, grill skill, factory.config.yml
-factory setup                                # create the labels
-factory list [--state S] [--type spec|build] [--all]
-factory show N [--comments [--from role,role]]
-factory next                                 # tickets a builder may start now
-factory spec-status S                        # criteria, uncovered, open tickets
+forge init [dir] [--force]                 # install agents, grill skill, factory.config.yml
+forge setup                                # create the labels
+forge list [--state S] [--type spec|build] [--all]
+forge show N [--comments [--from role,role]]
+forge next                                 # tickets a builder may start now
+forge spec-status S                        # criteria, uncovered, open tickets
 
-factory create --as grill --type spec --title T --body-file F
-factory create --as planner --spec S --title T --covers AC-1,AC-2 --component ui [--blocked-by 2] [--priority p1] [--risky]
-factory edit N --as planner [--risky | --not-risky] [--component C] [--covers ...] [--blocked-by ...]
-factory move N <state> --as R [--reason R] [--note-file F] [--pr P]
-factory tests-ready N --as qa-writer --note-file F
-factory gate N security pass|fail --as security [--reason R] --note-file F
-factory note N --as R --note-file F
-factory evidence N <file> --as qa-reporter   # upload, print the link
-factory close-spec S --as planner
+forge create --as grill --type spec --title T --body-file F
+forge create --as planner --spec S --title T --covers AC-1,AC-2 --component ui [--blocked-by 2] [--priority p1] [--risky]
+forge edit N --as planner [--risky | --not-risky] [--component C] [--covers ...] [--blocked-by ...]
+forge move N <state> --as R [--reason R] [--note-file F] [--pr P]
+forge tests-ready N --as qa-writer --note-file F
+forge gate N security pass|fail --as security [--reason R] --note-file F
+forge note N --as R --note-file F
+forge evidence N <file> --as qa-reporter   # upload, print the link
+forge close-spec S --as planner
 
-factory interface N                          # the design note's Public interface only
-factory pr N --as builder --body-file F      # open or find the PR for branch ticket-N
-factory diff N                               # the PR's diff
-factory checks N                             # CI on the PR head, and whether it is merged; exit 3 failed, 4 pending
-factory dispatch [--dry-run] [--max-runs N] [--watch [--interval S]]
+forge interface N                          # the design note's Public interface only
+forge pr N --as builder --body-file F      # open or find the PR for branch ticket-N
+forge diff N                               # the PR's diff
+forge checks N                             # CI on the PR head, and whether it is merged; exit 3 failed, 4 pending
+forge dispatch [--dry-run] [--max-runs N] [--watch [--interval S]]
 ```
 
 The repo comes from `--repo`, then `FACTORY_REPO`, then `repo:` in `factory.config.yml`, then the `origin` remote.
@@ -213,12 +215,12 @@ claudeArgs:         # optional: flags for each agent run (default below)
   ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
 ```
 
-`factory init --force` rewrites this file from the template, so keep a copy when you reinstall the agents.
+`forge init --force` rewrites this file from the template, so keep a copy when you reinstall the agents.
 
 ## Development
 
 ```sh
 npm test          # unit tests, including the agent-prompt contract test
 npm run typecheck
-npm run build     # dist/, used by the linked `factory` command
+npm run build     # dist/, used by the linked `forge` command
 ```

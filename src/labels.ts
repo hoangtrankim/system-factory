@@ -18,7 +18,7 @@ export interface LabelSpec {
   description: string;
 }
 
-// Labels "factory setup" creates. Round, component and gate labels are created on demand.
+// Labels "forge setup" creates. Round, component and gate labels are created on demand.
 export const FIXED_LABELS: LabelSpec[] = [
   ...STATES.map((s) => ({ name: STATE_PREFIX + s, color: stateColor(s), description: `Factory state: ${s}` })),
   { name: SPEC_LABEL, color: '5319e7', description: 'A spec that is split into tickets' },

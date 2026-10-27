@@ -1,4 +1,4 @@
-// factory init: installs the agents and the grill skill into a project's .claude folder.
+// forge init: installs the agents and the grill skill into a project's .claude folder.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';

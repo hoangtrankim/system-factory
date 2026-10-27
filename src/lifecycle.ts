@@ -132,7 +132,7 @@ export function findRule(from: State, to: State, role: Role): Rule | undefined {
 }
 
 export function canMove(ticket: Ticket, req: MoveRequest, ctx: MoveContext = { openBlockers: [] }): Check {
-  if (ticket.type === 'spec') return refuse(`#${ticket.id} is a spec; specs close with "factory close-spec"`);
+  if (ticket.type === 'spec') return refuse(`#${ticket.id} is a spec; specs close with "forge close-spec"`);
   if (ticket.closed || ticket.state === 'done') return refuse(`#${ticket.id} is done`);
   if (ticket.state === req.to) return refuse(`#${ticket.id} is already ${req.to}`);
 
