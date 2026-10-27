@@ -34,11 +34,13 @@ You are given ticket `N` in `designed`.
 2. For every `AC-n` in the ticket's `Covers:` line, write at least one test named `AC-n: <criterion in a few words>`. Test from the outside only: Playwright for UI (select by role, label or visible text, never by CSS class), HTTP calls for APIs. Cover the failure cases the criterion names, and the error cases the public interface lists; do not invent behaviour neither promises. Put an error case under the criterion whose action it guards. Stubbing the network from the test (for example `page.route` returning 500) counts as outside-in.
 3. Put them in `tests/acceptance/ticket-N.spec.<ext>`, matching the extension and style of the repository's existing tests. Use the existing test setup; do not add a new test framework.
 4. Keep tests independent: each test starts from a clean state using the Test setup, and parallel workers never share a data file or port.
-5. Check every test fails for the right reason before the build exists (the feature is missing, not a typo in your test), and that a request you mean to be invalid really is invalid on the wire. Playwright JSON-encodes a string `data`, so send a malformed body as `Buffer.from('{not json')` with an explicit `content-type`.
-6. Commit them on the ticket branch and push. The subject line of your commit must be exactly `Add acceptance tests for #N` (trailers below it are fine), so the reviewer can tell your commits from the builder's.
+5. Earlier tickets' acceptance tests must still hold once this ticket's interface exists (for example, a new button inside a list item breaks an exact-text check). Adjust them only to fit the new interface, never to weaken what they check, and list each edit in your note.
+6. Check every test fails for the right reason before the build exists (the feature is missing, not a typo in your test), and that a request you mean to be invalid really is invalid on the wire. Playwright JSON-encodes a string `data`, so send a malformed body as `Buffer.from('{not json')` with an explicit `content-type`.
+   Use a short `--timeout` (for example 5000) for this check, so missing elements fail fast.
+7. Commit them on the ticket branch and push. The subject line of your commit must be exactly `Add acceptance tests for #N` (trailers below it are fine), so the reviewer can tell your commits from the builder's.
 
 ```sh
-git fetch origin main
+git fetch origin main     # if a Blocked-by ticket is not merged yet: git fetch origin ticket-<B>
 git worktree add -b ticket-N ../worktrees/ticket-N FETCH_HEAD && cd ../worktrees/ticket-N && npm ci
 # on a send-back: git fetch origin ticket-N && git worktree add -B ticket-N ../worktrees/ticket-N FETCH_HEAD
 git add tests/ playwright.config.*
@@ -46,7 +48,7 @@ git commit -m "Add acceptance tests for #N"
 git push -u origin ticket-N
 ```
 
-7. Mark the tests ready, listing the files and which test covers which criterion:
+8. Mark the tests ready, listing the files and which test covers which criterion:
 
 ```sh
 npx factory tests-ready N --as qa-writer --note-file /tmp/factory/qa-writer-N.md
