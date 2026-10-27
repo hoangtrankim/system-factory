@@ -28,7 +28,7 @@ Commands
          [--component C]... [--covers AC-1] [--priority p0..p3] [--risky | --not-risky]
   pr <id> --as builder [--title T] [--body-file F]   Open (or find) the PR for branch ticket-<id>
   diff <id>                               The diff of the ticket's PR
-  checks <id>                             CI checks of the ticket's PR; exit 3 if any failed, 4 if pending
+  checks <id>                             CI checks of the PR's head commit; exit 3 if any failed, 4 if pending or none yet
   move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
@@ -235,9 +235,17 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       return 0;
 
     case 'checks': {
-      const checks = await factory.checks(id(rest[0]));
-      if (json) out(JSON.stringify(checks, null, 2));
-      else out(checks.length ? checks.map((c) => `${(c.conclusion ?? c.status).padEnd(10)} ${c.name}  ${c.url}`).join('\n') : '(no checks yet)');
+      const result = await factory.checks(id(rest[0]));
+      const { checks } = result;
+      if (json) out(JSON.stringify(result, null, 2));
+      else {
+        out(`PR #${result.pr} at ${result.headSha}`);
+        out(
+          checks.length
+            ? checks.map((c) => `${(c.conclusion ?? c.status).padEnd(10)} ${c.name}${c.runId ? `  run ${c.runId}` : ''}  ${c.url}`).join('\n')
+            : '(no checks yet)',
+        );
+      }
       if (checks.some((c) => c.conclusion && !['success', 'neutral', 'skipped'].includes(c.conclusion))) return 3;
       if (!checks.length || checks.some((c) => c.status !== 'completed')) return 4;
       return 0;

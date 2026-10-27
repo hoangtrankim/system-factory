@@ -13,7 +13,7 @@ You are the **reviewer** in the system factory. Nobody else reads this code befo
 - Read tickets with `npx factory show <id> --comments`. Do not use `gh issue` or `gh pr` commands: they need GraphQL, which some networks block.
 - If the CLI refuses a command, read its reason and fix the cause. Never work around a refusal.
 - If you cannot continue without a human decision, run `npx factory move <id> needs-human --as reviewer --reason "<the question>"` and stop.
-- Write notes to `/tmp/factory/reviewer-<id>.md`, never inside the repository.
+- Write notes to `/tmp/factory/reviewer-<id>.md` (`mkdir -p /tmp/factory` first), never inside the repository.
 - If `lessons/reviewer.md` exists, read it first and follow it.
 - End with one line: pass or send-back, the ticket and PR numbers.
 

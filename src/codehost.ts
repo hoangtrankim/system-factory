@@ -17,6 +17,8 @@ export interface Check {
   status: string;
   conclusion: string | null;
   url: string;
+  // The Actions run the check belongs to, when there is one (for `gh run view/download`).
+  runId?: number;
 }
 
 export interface CodeHost {
@@ -78,6 +80,9 @@ export class GitHubCodeHost implements CodeHost {
     const res = (await this.gh({ path: this.path(`commits/${pr.headSha}/check-runs?per_page=100`) })) as {
       check_runs: Array<{ name: string; status: string; conclusion: string | null; html_url: string }>;
     };
-    return res.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, url: c.html_url }));
+    return res.check_runs.map((c) => {
+      const run = /\/actions\/runs\/(\d+)/.exec(c.html_url)?.[1];
+      return { name: c.name, status: c.status, conclusion: c.conclusion, url: c.html_url, ...(run ? { runId: Number(run) } : {}) };
+    });
   }
 }

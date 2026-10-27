@@ -139,8 +139,9 @@ describe('CLI', () => {
   });
 
   it('exits 3 when a check failed, 4 while pending, 0 when green', async () => {
-    const { exec, tracker, codeHost } = await harness();
+    const { exec, tracker, codeHost, lines } = await harness();
     await tracker.update({ ...(await tracker.get(2)), pr: 7 });
+    codeHost.prs.push({ number: 7, url: 'u', head: 'ticket-2', headSha: 'abc123', state: 'open', merged: false });
     const c = { name: 'test', url: 'u' };
     codeHost.checkRuns = [{ ...c, status: 'completed', conclusion: 'failure' }];
     expect(await exec('checks 2')).toBe(3);
@@ -148,6 +149,9 @@ describe('CLI', () => {
     expect(await exec('checks 2')).toBe(4);
     codeHost.checkRuns = [{ ...c, status: 'completed', conclusion: 'success' }];
     expect(await exec('checks 2')).toBe(0);
+    expect(lines.join('\n')).toContain('PR #7 at abc123');
+    codeHost.checkRuns = [];
+    expect(await exec('checks 2')).toBe(4);
   });
 
   it('edits risk with --not-risky', async () => {

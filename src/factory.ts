@@ -251,7 +251,9 @@ export class Factory {
   }
 
   async checks(id: number) {
-    return this.host().checks(await this.prOf(id));
+    const host = this.host();
+    const pr = await host.getPr(await this.prOf(id));
+    return { pr: pr.number, headSha: pr.headSha, checks: await host.checks(pr.number) };
   }
 
   private host(): CodeHost {
