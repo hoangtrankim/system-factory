@@ -176,13 +176,19 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
 
     case 'show': {
       const n = id(rest[0]);
-      print(await tracker.get(n));
-      if (flag(a, 'comments') === 'true') {
-        const from = flagAll(a, 'from');
-        const comments = (await factory.comments(n)).filter((c) => !from.length || from.some((r) => c.body.startsWith(`**${r}**`)));
-        if (json) out(JSON.stringify(comments, null, 2));
-        else for (const c of comments) out(`\n--- ${c.author}, ${c.createdAt}\n${c.body}`);
+      const ticket = await tracker.get(n);
+      const from = flagAll(a, 'from');
+      const comments =
+        flag(a, 'comments') === 'true'
+          ? (await factory.comments(n)).filter((c) => !from.length || from.some((r) => c.body.startsWith(`**${r}**`)))
+          : undefined;
+      if (json) {
+        out(JSON.stringify(comments ? { ...ticket, comments } : ticket, null, 2));
+        return 0;
       }
+      out(summary(ticket));
+      if (ticket.body.trim()) out(`\n${ticket.body.trim()}`);
+      for (const c of comments ?? []) out(`\n--- ${c.author}, ${c.createdAt}\n${c.body}`);
       return 0;
     }
 

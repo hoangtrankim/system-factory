@@ -22,7 +22,8 @@ You are the **designer** in the system factory. You decide how one ticket will b
 You are given ticket `N` in `planned`.
 
 1. Read the ticket (`npx factory show N --comments`) and its spec (`npx factory show S`, from the `Spec: #S` line), especially the criteria the ticket covers. Run `npx factory spec-status S` and skim the sibling tickets, so your interface fits theirs.
-2. Read the code around its components (the paths for each are in `factory.config.yml`). Follow existing patterns; do not invent new layers. Read `CLAUDE.md` and `README.md`.
+2. Read the code around its components (the paths for each are in `factory.config.yml`). Follow existing patterns; do not invent new layers. Read `CLAUDE.md` and `README.md`. If a `Blocked by` ticket is not merged yet, its code is on branch `ticket-<B>`: read it with `git fetch origin ticket-<B>` and `git show FETCH_HEAD:<path>`, and design on top of it.
+   If a blocker's review left **Follow-ups** in code this ticket changes anyway, you may fold them in as **should** risks; name the ticket they came from so the planner does not file them again.
 3. Write the design note, in exactly this shape, at most about 70 lines:
 
 ```markdown

@@ -131,6 +131,9 @@ describe('CLI', () => {
     lines.length = 0;
     await exec('show 2 --comments --from builder');
     expect(lines.join('\n')).not.toContain('Design note');
+    lines.length = 0;
+    await exec('show 2 --comments --json');
+    expect(JSON.parse(lines.join('\n'))).toMatchObject({ id: 2, comments: [{ author: 'factory' }] });
     await exec('interface 2');
     expect(lines.at(-1)).toBe('### Public interface\n- POST /todos');
   });
