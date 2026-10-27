@@ -1,12 +1,12 @@
 // In-memory tracker for tests and dry runs.
 
 import type { Ticket } from '../lifecycle.js';
-import { NotFoundError, type ListFilter, type NewTicket, type Tracker } from './tracker.js';
+import { NotFoundError, type Comment, type ListFilter, type NewTicket, type Tracker } from './tracker.js';
 
 export class MemoryTracker implements Tracker {
   private tickets = new Map<number, Ticket>();
   private nextId = 1;
-  readonly comments = new Map<number, string[]>();
+  readonly posted = new Map<number, string[]>();
   readonly uploads = new Map<string, Buffer>();
 
   async setup(): Promise<void> {}
@@ -46,7 +46,12 @@ export class MemoryTracker implements Tracker {
 
   async comment(id: number, body: string): Promise<void> {
     await this.get(id);
-    this.comments.set(id, [...(this.comments.get(id) ?? []), body]);
+    this.posted.set(id, [...(this.posted.get(id) ?? []), body]);
+  }
+
+  async comments(id: number): Promise<Comment[]> {
+    await this.get(id);
+    return (this.posted.get(id) ?? []).map((body, i) => ({ author: 'factory', body, createdAt: new Date(i * 1000).toISOString() }));
   }
 
   async close(id: number): Promise<void> {

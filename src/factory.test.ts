@@ -57,7 +57,7 @@ describe('Factory', () => {
     const { t } = await specWithTicket();
     await expect(factory.move(t.id, { to: 'designed', role: 'builder' })).rejects.toThrow(RuleError);
     expect((await tracker.get(t.id)).state).toBe('planned');
-    expect(tracker.comments.get(t.id)).toBeUndefined();
+    expect(tracker.posted.get(t.id)).toBeUndefined();
     expect(events.filter((e) => e.kind === 'move')).toHaveLength(0);
   });
 
@@ -82,7 +82,7 @@ describe('Factory', () => {
       expect(after.round).toBe(round);
       expect(after.state).toBe(round < 3 ? 'building' : 'needs-human');
     }
-    expect(tracker.comments.get(t.id)?.at(-1)).toContain('round 3 of 3');
+    expect(tracker.posted.get(t.id)?.at(-1)).toContain('round 3 of 3');
     expect(events.at(-1)).toMatchObject({ escalated: true, to: 'needs-human', reason: 'missing-test' });
   });
 

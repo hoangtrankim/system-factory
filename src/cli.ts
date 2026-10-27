@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig, resolveRepo } from './config.js';
 import { Factory, RuleError } from './factory.js';
 import { GATES, ROLES, STATES, isRole, isState, type Gate, type Priority, type Role, type Ticket } from './lifecycle.js';
+import { GitHubCodeHost, type CodeHost } from './codehost.js';
 import { init } from './init.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
@@ -17,11 +18,17 @@ Commands
   init [dir] [--force]                    Install the agents, the grill skill and factory.config.yml
   setup                                   Create the factory labels in the repo
   list [--state S] [--type spec|build] [--all]
-  show <id>
+  show <id> [--comments [--from role,role]]   --from keeps comments written by those roles
+  interface <id>                          Print the Public interface from the design note
   next [--limit N]                        Tickets a builder may start now
   create --as R --title T [--body B | --body-file F] [--type spec]
          [--spec N --covers AC-1,AC-2] [--blocked-by 1,2] [--component C]...
          [--priority p0..p3] [--risky]
+  edit <id> --as planner|owner [--title T] [--body-file F] [--blocked-by 1,2]
+         [--component C]... [--covers AC-1] [--priority p0..p3] [--risky | --not-risky]
+  pr <id> --as builder [--title T] [--body-file F]   Open (or find) the PR for branch ticket-<id>
+  diff <id>                               The diff of the ticket's PR
+  checks <id>                             CI checks of the ticket's PR; exit 3 if any failed, 4 if pending
   move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
@@ -29,6 +36,8 @@ Commands
   evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
   close-spec <id> --as R
+
+Commands that read GitHub use the REST API only, so they work where GraphQL is blocked.
 
 Options
   --repo owner/name   Defaults to FACTORY_REPO, factory.config.yml, then the origin remote
@@ -42,7 +51,7 @@ interface Args {
   flags: Map<string, string[]>;
 }
 
-const BOOLEAN_FLAGS = new Set(['risky', 'json', 'all', 'help', 'force']);
+const BOOLEAN_FLAGS = new Set(['risky', 'not-risky', 'json', 'all', 'help', 'force', 'comments']);
 
 export function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -72,9 +81,9 @@ class UsageError extends Error {}
 const flag = (a: Args, name: string) => a.flags.get(name)?.at(-1);
 const flagAll = (a: Args, name: string) => (a.flags.get(name) ?? []).flatMap((v) => v.split(',')).map((s) => s.trim()).filter(Boolean);
 
-function note(a: Args): string | undefined {
+function note(a: Args, cwd = process.cwd()): string | undefined {
   const file = flag(a, 'note-file');
-  return file ? readFileSync(file, 'utf8') : flag(a, 'note');
+  return file ? readFileSync(resolve(cwd, file), 'utf8') : flag(a, 'note');
 }
 
 function role(a: Args): Role {
@@ -111,6 +120,7 @@ function summary(t: Ticket): string {
 
 export interface Deps {
   tracker?: Tracker;
+  codeHost?: CodeHost;
   out?: (s: string) => void;
   cwd?: string;
 }
@@ -133,8 +143,14 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
   }
 
   const config = loadConfig(deps.cwd);
-  const tracker = deps.tracker ?? new GitHubTracker(resolveRepo(flag(a, 'repo'), config, deps.cwd));
-  const factory = new Factory(tracker, { maxRounds: config.maxRounds });
+  const repo = () => resolveRepo(flag(a, 'repo'), config, deps.cwd);
+  const tracker = deps.tracker ?? new GitHubTracker(repo());
+  const codeHost = deps.codeHost ?? (deps.tracker ? undefined : new GitHubCodeHost(repo()));
+  const factory = new Factory(tracker, { maxRounds: config.maxRounds, codeHost, baseBranch: config.base });
+  const body = () => {
+    const file = flag(a, 'body-file');
+    return file ? readFileSync(resolve(deps.cwd ?? process.cwd(), file), 'utf8') : flag(a, 'body');
+  };
   const json = flag(a, 'json') === 'true';
   const print = (v: Ticket | Ticket[] | object) => {
     if (json) return out(JSON.stringify(v, null, 2));
@@ -158,9 +174,63 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       return 0;
     }
 
-    case 'show':
-      print(await tracker.get(id(rest[0])));
+    case 'show': {
+      const n = id(rest[0]);
+      print(await tracker.get(n));
+      if (flag(a, 'comments') === 'true') {
+        const from = flagAll(a, 'from');
+        const comments = (await factory.comments(n)).filter((c) => !from.length || from.some((r) => c.body.startsWith(`**${r}**`)));
+        if (json) out(JSON.stringify(comments, null, 2));
+        else for (const c of comments) out(`\n--- ${c.author}, ${c.createdAt}\n${c.body}`);
+      }
       return 0;
+    }
+
+    case 'interface':
+      out(await factory.publicInterface(id(rest[0])));
+      return 0;
+
+    case 'edit': {
+      const risky = flag(a, 'risky') === 'true' ? true : flag(a, 'not-risky') === 'true' ? false : undefined;
+      const list = (name: string) => (a.flags.has(name) ? flagAll(a, name) : undefined);
+      print(
+        await factory.edit(
+          id(rest[0]),
+          {
+            title: flag(a, 'title'),
+            body: body(),
+            priority: priority(flag(a, 'priority')),
+            risky,
+            components: list('component'),
+            blockedBy: list('blocked-by')?.map((v) => id(v, '--blocked-by')),
+            covers: list('covers'),
+          },
+          role(a),
+          note(a, deps.cwd),
+        ),
+      );
+      return 0;
+    }
+
+    case 'pr': {
+      const pr = await factory.openPr(id(rest[0]), role(a), flag(a, 'title'), body());
+      if (json) out(JSON.stringify(pr, null, 2));
+      else out(`PR #${pr.number} ${pr.url}`);
+      return 0;
+    }
+
+    case 'diff':
+      out(await factory.diff(id(rest[0])));
+      return 0;
+
+    case 'checks': {
+      const checks = await factory.checks(id(rest[0]));
+      if (json) out(JSON.stringify(checks, null, 2));
+      else out(checks.length ? checks.map((c) => `${(c.conclusion ?? c.status).padEnd(10)} ${c.name}  ${c.url}`).join('\n') : '(no checks yet)');
+      if (checks.some((c) => c.conclusion && !['success', 'neutral', 'skipped'].includes(c.conclusion))) return 3;
+      if (!checks.length || checks.some((c) => c.status !== 'completed')) return 4;
+      return 0;
+    }
 
     case 'next': {
       const limit = flag(a, 'limit');
@@ -171,7 +241,6 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     case 'create': {
       const title = flag(a, 'title');
       if (!title) throw new UsageError('--title is required');
-      const bodyFile = flag(a, 'body-file');
       const type = flag(a, 'type') ?? 'build';
       if (type !== 'spec' && type !== 'build') throw new UsageError(`--type must be spec or build`);
       const spec = flag(a, 'spec');
@@ -179,7 +248,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         await factory.create(
           {
             title,
-            body: bodyFile ? readFileSync(bodyFile, 'utf8') : (flag(a, 'body') ?? ''),
+            body: body() ?? '',
             type,
             priority: priority(flag(a, 'priority')),
             risky: flag(a, 'risky') === 'true',
@@ -203,7 +272,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
           to,
           role: role(a),
           reason: flag(a, 'reason'),
-          note: note(a),
+          note: note(a, deps.cwd),
           pr: pr ? id(pr, '--pr') : undefined,
         }),
       );
@@ -211,19 +280,19 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     }
 
     case 'tests-ready':
-      print(await factory.markTestsReady(id(rest[0]), role(a), note(a)));
+      print(await factory.markTestsReady(id(rest[0]), role(a), note(a, deps.cwd)));
       return 0;
 
     case 'gate': {
       const [ticket, gate, result] = rest;
       if (!gate || !(GATES as readonly string[]).includes(gate)) throw new UsageError(`gate must be one of ${GATES.join(', ')}`);
       if (result !== 'pass' && result !== 'fail') throw new UsageError('gate result must be pass or fail');
-      print(await factory.recordGate(id(ticket), gate as Gate, result, role(a), flag(a, 'reason'), note(a)));
+      print(await factory.recordGate(id(ticket), gate as Gate, result, role(a), flag(a, 'reason'), note(a, deps.cwd)));
       return 0;
     }
 
     case 'note': {
-      const text = note(a);
+      const text = note(a, deps.cwd);
       if (!text) throw new UsageError('note needs --note or --note-file');
       await factory.note(id(rest[0]), role(a), text);
       out('Noted.');

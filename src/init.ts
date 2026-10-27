@@ -43,7 +43,17 @@ export function init(target: string, opts: { force?: boolean; repo?: string; sou
     for (const f of files(dir)) place(f, join(target, to, relative(dir, f)));
   }
 
-  const config = `# System factory settings. See https://github.com/hoangtrankim/system-factory\n${opts.repo ? `repo: ${opts.repo}\n` : ''}maxRounds: 3\n`;
+  const config = [
+    '# System factory settings. See https://github.com/hoangtrankim/system-factory',
+    ...(opts.repo ? [`repo: ${opts.repo}`] : []),
+    'base: main',
+    'maxRounds: 3',
+    '# Component name -> paths it owns. Tickets are tagged with these names; the reviewer',
+    '# checks that a PR stays inside its components (tests/ is always allowed).',
+    'components:',
+    '  app: ["src/**"]',
+    '',
+  ].join('\n');
   place('', join(target, CONFIG_FILE), config);
   return result;
 }

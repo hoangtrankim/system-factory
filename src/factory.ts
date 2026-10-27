@@ -6,11 +6,14 @@ import {
   applyMove,
   canCloseSpec,
   canCreate,
+  canEdit,
+  canOpenPr,
   canUploadEvidence,
   canMarkTestsReady,
   canMove,
   canRecordGate,
   pickReady,
+  publicInterface,
   specStatus,
   type Check,
   type Gate,
@@ -22,13 +25,14 @@ import {
   type Ticket,
   type TicketType,
 } from './lifecycle.js';
-import type { Tracker } from './tracker/tracker.js';
+import type { CodeHost, PullRequest } from './codehost.js';
+import type { Comment, Tracker } from './tracker/tracker.js';
 
 export class RuleError extends Error {}
 
 export interface FactoryEvent {
   at: string;
-  kind: 'create' | 'move' | 'mark' | 'gate' | 'close-spec' | 'note' | 'evidence';
+  kind: 'create' | 'edit' | 'move' | 'mark' | 'gate' | 'close-spec' | 'note' | 'evidence' | 'pr';
   file?: string;
   ticket: number;
   role: Role;
@@ -45,6 +49,8 @@ export interface FactoryOptions {
   maxRounds?: number;
   onEvent?: (e: FactoryEvent) => void;
   now?: () => Date;
+  codeHost?: CodeHost;
+  baseBranch?: string;
 }
 
 export interface CreateInput {
@@ -58,6 +64,8 @@ export interface CreateInput {
   covers?: string[];
   spec?: number;
 }
+
+export type EditInput = Partial<Pick<Ticket, 'title' | 'body' | 'priority' | 'risky' | 'components' | 'blockedBy' | 'covers'>>;
 
 export interface MoveInput {
   to: State;
@@ -108,6 +116,18 @@ export class Factory {
     });
     this.emit({ kind: 'create', ticket: t.id, role, to: t.state });
     return t;
+  }
+
+  // Planner or owner fixes a ticket's plan (blockers, components, risk) before building starts.
+  async edit(id: number, input: EditInput, role: Role, note?: string): Promise<Ticket> {
+    const ticket = await this.tracker.get(id);
+    check(canEdit(ticket, role));
+    const changed = (Object.keys(input) as (keyof EditInput)[]).filter((k) => input[k] !== undefined);
+    if (!changed.length) throw new RuleError('edit needs at least one field to change');
+    const saved = await this.tracker.update({ ...ticket, ...Object.fromEntries(changed.map((k) => [k, input[k]])) });
+    await this.tracker.comment(id, `**${role}** edited ${changed.map((k) => `\`${k}\``).join(', ')}.${note ? `\n\n${note}` : ''}`);
+    this.emit({ kind: 'edit', ticket: id, role });
+    return saved;
   }
 
   async move(id: number, input: MoveInput): Promise<Ticket> {
@@ -189,6 +209,54 @@ export class Factory {
     const url = await this.tracker.upload(id, name, content);
     this.emit({ kind: 'evidence', ticket: id, role, file: name });
     return url;
+  }
+
+  async comments(id: number): Promise<Comment[]> {
+    return this.tracker.comments(id);
+  }
+
+  async publicInterface(id: number): Promise<string> {
+    const found = publicInterface((await this.tracker.comments(id)).map((c) => c.body));
+    if (!found) throw new RuleError(`#${id} has no design note with a "Public interface" section yet`);
+    return found;
+  }
+
+  // One ticket, one branch (ticket-N), one PR. Returns the open PR if there is one already.
+  async openPr(id: number, role: Role, title?: string, body?: string): Promise<PullRequest> {
+    const host = this.host();
+    const ticket = await this.tracker.get(id);
+    check(canOpenPr(ticket, role));
+    const branch = `ticket-${id}`;
+    const existing = await host.findPr(branch);
+    // "Ticket", not "Closes": the ticket is closed by its move to done, not by GitHub.
+    const pr =
+      existing?.state === 'open'
+        ? existing
+        : await host.openPr(branch, this.opts.baseBranch ?? 'main', title ?? ticket.title, `${body ? `${body.trim()}\n\n` : ''}Ticket: #${id}`);
+    if (ticket.pr === pr.number) return pr;
+    await this.tracker.update({ ...ticket, pr: pr.number });
+    await this.tracker.comment(id, `**${role}** opened PR #${pr.number}.`);
+    this.emit({ kind: 'pr', ticket: id, role });
+    return pr;
+  }
+
+  async prOf(id: number): Promise<number> {
+    const ticket = await this.tracker.get(id);
+    if (!ticket.pr) throw new RuleError(`#${id} has no PR yet`);
+    return ticket.pr;
+  }
+
+  async diff(id: number): Promise<string> {
+    return this.host().diff(await this.prOf(id));
+  }
+
+  async checks(id: number) {
+    return this.host().checks(await this.prOf(id));
+  }
+
+  private host(): CodeHost {
+    if (!this.opts.codeHost) throw new Error('no code host configured');
+    return this.opts.codeHost;
   }
 
   async next(limit?: number): Promise<Ticket[]> {

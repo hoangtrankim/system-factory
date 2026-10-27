@@ -41,6 +41,7 @@ export const SEND_BACK_REASONS = [
   'scope-creep',
   'design',
   'unmarked-risk',
+  'flawed-test',
 ] as const;
 export type SendBackReason = (typeof SEND_BACK_REASONS)[number];
 
@@ -100,6 +101,9 @@ export const RULES: readonly Rule[] = [
   { from: 'in-qa', to: 'done', roles: ['system'], kind: 'forward' },
   { from: 'in-review', to: 'building', roles: ['reviewer', 'security'], kind: 'send-back' },
   { from: 'in-qa', to: 'building', roles: ['qa-reporter', 'system'], kind: 'send-back' },
+  // An acceptance test that does not test what its criterion says goes back to the qa-writer.
+  { from: 'building', to: 'designed', roles: ['builder'], kind: 'send-back' },
+  { from: 'in-review', to: 'designed', roles: ['reviewer'], kind: 'send-back' },
   { from: '*', to: 'blocked', roles: [...AGENT_ROLES, 'owner'], kind: 'side' },
   { from: '*', to: 'needs-human', roles: [...AGENT_ROLES, 'owner', 'system'], kind: 'side' },
   { from: 'blocked', to: 'planned', roles: ['planner', 'owner'], kind: 'side' },
@@ -147,6 +151,9 @@ export function canMove(ticket: Ticket, req: MoveRequest, ctx: MoveContext = { o
   if (rule.kind === 'send-back') {
     if (!req.reason) return refuse(`a send-back needs --reason (${SEND_BACK_REASONS.join(', ')})`);
     if (!isSendBackReason(req.reason)) return refuse(`unknown send-back reason "${req.reason}"`);
+    if ((req.to === 'designed') !== (req.reason === 'flawed-test')) {
+      return refuse(`only a flawed-test send-back goes to designed, and it always goes there`);
+    }
   }
   if ((req.to === 'blocked' || req.to === 'needs-human') && !req.reason) {
     return refuse(`moving to ${req.to} needs --reason`);
@@ -197,6 +204,7 @@ export function applyMove(ticket: Ticket, req: MoveRequest, maxRounds = DEFAULT_
   if (isSendBack(ticket.state, req.to, req.role)) {
     next.round = ticket.round + 1;
     next.gates = {};
+    if (req.to === 'designed') next.testsReady = false;
     if (next.round >= maxRounds) {
       next.state = 'needs-human';
       return { ticket: next, escalated: true };
@@ -229,6 +237,37 @@ export function canCreate(type: TicketType, role: Role): Check {
   if (type === 'spec' && role !== 'grill' && role !== 'owner') return refuse(`only grill or owner may file a spec`);
   if (type === 'build' && role !== 'planner' && role !== 'owner') return refuse(`only planner or owner may file a ticket`);
   return ok;
+}
+
+// Planner and owner may correct a ticket's plan until building starts.
+export function canEdit(ticket: Ticket, role: Role): Check {
+  if (role !== 'planner' && role !== 'owner') return refuse(`only planner or owner may edit a ticket`);
+  if (ticket.type !== 'build') return refuse(`#${ticket.id} is a spec`);
+  const editable: State[] = ['planned', 'designed', 'blocked', 'needs-human'];
+  if (!editable.includes(ticket.state)) return refuse(`#${ticket.id} is ${ticket.state}; tickets can be edited before building`);
+  return ok;
+}
+
+export function canOpenPr(ticket: Ticket, role: Role): Check {
+  if (role !== 'builder' && role !== 'owner') return refuse(`only builder may open a PR`);
+  if (ticket.type !== 'build') return refuse(`#${ticket.id} is a spec`);
+  if (ticket.state !== 'building') return refuse(`open the PR while building (#${ticket.id} is ${ticket.state})`);
+  return ok;
+}
+
+// The designer's note is a comment with a "Public interface" section; the qa-writer reads
+// only that section, so the tests stay blind to how the ticket gets built.
+export function publicInterface(comments: string[]): string | undefined {
+  for (const body of [...comments].reverse()) {
+    const m = /^(#{2,4})\s+Public interface\b.*$/im.exec(body);
+    if (!m) continue;
+    const level = m[1]!.length;
+    const rest = body.slice(m.index);
+    const lines = rest.split('\n');
+    const end = lines.findIndex((l, i) => i > 0 && new RegExp(`^#{1,${level}}\\s`).test(l));
+    return (end === -1 ? lines : lines.slice(0, end)).join('\n').trim();
+  }
+  return undefined;
 }
 
 export function canUploadEvidence(role: Role): Check {
