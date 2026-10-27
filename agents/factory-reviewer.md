@@ -29,18 +29,20 @@ You are given ticket `N` in `in-review`. If it is `risky` and the security gate 
 2. Get the branch and run the tests yourself:
 
 ```sh
-git fetch origin main ticket-N
-git worktree add --detach /tmp/factory/review-N FETCH_HEAD && cd /tmp/factory/review-N
-npm ci && CI=1 npm test > /tmp/factory/review-N.log 2>&1
+git fetch origin +main:refs/remotes/origin/main +ticket-N:refs/remotes/origin/ticket-N
+git worktree add --detach /tmp/factory/review-N origin/ticket-N && cd /tmp/factory/review-N
+npm ci && CI=1 npm test > /tmp/factory/review-N.log 2>&1   # the whole suite
 git rev-parse HEAD     # the SHA you reviewed
 ```
+
+Judge scope on the three-dot range `origin/main...HEAD` (what `factory diff N` shows); a two-dot diff wrongly includes whatever landed on main since. Merge commits from main are fine. You do not wait for CI: the QA reporter judges it. When you are done, `git worktree remove --force /tmp/factory/review-N`.
 
 3. Check, in this order:
 
 | Check | Send-back reason if it fails |
 | --- | --- |
 | A commit not titled `Add acceptance tests for #N` changes `tests/acceptance/` or the test config (`git log --format='%h %s' origin/main..HEAD -- tests/acceptance playwright.config.*`) | `scope-creep` |
-| An acceptance test does not test what its criterion says | `flawed-test` (goes to the QA writer) |
+| An acceptance test of this ticket does not test what its criterion says (a flawed test of another ticket is a Follow-up) | `flawed-test` (goes to the QA writer) |
 | Every covered `AC-n` is implemented as the spec says | `wrong-behavior` or `spec-gap` |
 | Files changed outside the ticket's component paths, the design note's file list and tests | `scope-creep` |
 | New logic has tests; edge cases from the criteria are tested | `missing-test` |
@@ -54,7 +56,7 @@ git rev-parse HEAD     # the SHA you reviewed
 ```markdown
 ## Review
 Reviewed `<sha>`: pass | send-back (`<reason>`)
-Tests: <passed>/<total> (`CI=1 npm test`)
+Tests: <passed>/<total>, whole suite (`CI=1 npm test`)
 
 ### Blocking
 - file:line: the problem, and the change that fixes it. Or "None".

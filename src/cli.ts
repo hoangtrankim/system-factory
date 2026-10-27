@@ -187,6 +187,11 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         return 0;
       }
       out(summary(ticket));
+      const facts = [
+        ticket.components.length ? `Components: ${ticket.components.join(', ')}` : '',
+        ticket.gates.security ? `Security gate: ${ticket.gates.security}` : '',
+      ].filter(Boolean);
+      if (facts.length) out(facts.join('\n'));
       if (ticket.body.trim()) out(`\n${ticket.body.trim()}`);
       for (const c of comments ?? []) out(`\n--- ${c.author}, ${c.createdAt}\n${c.body}`);
       return 0;
