@@ -99,6 +99,18 @@ describe('agent prompts', () => {
   });
 });
 
+describe('factory-run skill', () => {
+  const skill = load(join(PACKAGE_ROOT, 'skills', 'factory-run', 'SKILL.md'));
+
+  it('routes to every working agent and acts only as system', () => {
+    for (const r of ['planner', 'designer', 'qa-writer', 'builder', 'security', 'reviewer', 'qa-reporter']) {
+      expect(skill.body).toContain(`factory-${r}`);
+    }
+    expect(new Set([...skill.body.matchAll(/--as ([\w-]+)/g)].map((m) => m[1]))).toEqual(new Set(['system']));
+    expect(skill.body).toMatch(/Never merge/);
+  });
+});
+
 describe('grill skill', () => {
   const skill = load(join(PACKAGE_ROOT, 'skills', 'factory-grill', 'SKILL.md'));
 

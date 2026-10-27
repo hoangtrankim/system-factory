@@ -152,6 +152,9 @@ describe('CLI', () => {
     expect(lines.join('\n')).toContain('PR #7 at abc123');
     codeHost.checkRuns = [];
     expect(await exec('checks 2')).toBe(4);
+    codeHost.prs[0]!.merged = true;
+    await exec('checks 2 --json');
+    expect(JSON.parse(lines.slice(lines.findLastIndex((l) => l.startsWith('{'))).join('\n'))).toMatchObject({ merged: true });
   });
 
   it('edits risk with --not-risky', async () => {

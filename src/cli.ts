@@ -28,7 +28,8 @@ Commands
          [--component C]... [--covers AC-1] [--priority p0..p3] [--risky | --not-risky]
   pr <id> --as builder [--title T] [--body-file F]   Open (or find) the PR for branch ticket-<id>
   diff <id>                               The diff of the ticket's PR
-  checks <id>                             CI checks of the PR's head commit; exit 3 if any failed, 4 if pending or none yet
+  checks <id>                             CI checks of the PR's head commit, and whether it is merged;
+                                          exit 3 if any failed, 4 if pending or none yet
   move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
@@ -239,7 +240,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       const { checks } = result;
       if (json) out(JSON.stringify(result, null, 2));
       else {
-        out(`PR #${result.pr} at ${result.headSha}`);
+        out(`PR #${result.pr} at ${result.headSha}${result.merged ? ' (merged)' : result.state === 'closed' ? ' (closed)' : ''}`);
         out(
           checks.length
             ? checks.map((c) => `${(c.conclusion ?? c.status).padEnd(10)} ${c.name}${c.runId ? `  run ${c.runId}` : ''}  ${c.url}`).join('\n')

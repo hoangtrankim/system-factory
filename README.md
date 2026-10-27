@@ -23,6 +23,7 @@ Each role is a Claude Code subagent in `agents/`, plus the Grill skill in `skill
 | Agent | Picks up | Does | Tools |
 | --- | --- | --- | --- |
 | Grill (skill, main session) | an idea from the owner | grills the owner, writes the spec with `AC-n` criteria, files it | session |
+| Run (skill `/factory-run`, main session) | after a spec is filed, or after the owner merges | loops: picks the next agent per ticket from a routing table, runs it, repeats; stops at PRs to merge, `needs-human`, or 25 runs; marks merged tickets done | dispatcher |
 | `factory-planner` | a new spec, a blocked ticket, a finished spec | splits the spec into PR-sized tickets with coverage, priority, components, blockers, `risky` | read only + `factory` |
 | `factory-designer` | `planned` | design note: public interface, files, approach, risks | read + temp files |
 | `factory-qa-writer` | `designed` without tests | blind acceptance tests from the spec and the public interface only, pushed to `ticket-N` | no `Grep`, no `Edit` |
@@ -88,7 +89,7 @@ npx factory init --repo owner/name           # agents, grill skill, factory.conf
 npx factory setup                            # create the labels once
 ```
 
-Then, by hand until the dispatcher exists:
+In Claude Code, `/factory-grill` files a spec and `/factory-run` works the tickets until a PR needs your merge (run it again after merging). Or, step by step:
 
 ```sh
 npx factory create --as grill --type spec --title "Todo app" --body-file spec.md
