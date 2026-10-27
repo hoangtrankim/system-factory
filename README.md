@@ -15,7 +15,7 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 | 1 | Rules CLI, labels, GitHub tracker adapter, unit tests | done |
 | 2 | Agent prompts: Grill, Planner, Designer, QA test writer, Builder, Security, Reviewer, QA reporter | done, tuned by two dry runs on [todo-app](https://github.com/hoangtrankim/todo-app) |
 | 3 | CI gate, branch protection and merge queue | next: until then the owner merges each PR |
-| 4 | `forge dispatch`: the loop that runs the agents, plus JSONL logs | done |
+| 4 | `forge dispatch`: the loop that runs the agents, plus JSONL logs; it can also run from a GitHub Actions workflow | done |
 | 5 | Parallel slots, then retro and lessons from the logs | later |
 
 ## The workflow
@@ -95,6 +95,28 @@ The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on 
 | `--dry-run` | print the next step only |
 | `--max-runs N` | stop after N agent runs (default 25; ignored with `--watch`) |
 | `--watch [--interval S]` | never stop; when idle, check again every S seconds (default 300) for merges and new specs |
+
+### Run it from GitHub Actions
+
+Instead of keeping `forge dispatch --watch` open in a terminal, you can let GitHub events start it. `forge init` installs `.github/workflows/forge-dispatch.yml`. Each job runs `forge dispatch` until nothing can move, then exits. These events start it again:
+
+| Event | Why |
+| --- | --- |
+| issue opened, labelled or unlabelled | a new spec, or a person moved a ticket |
+| PR closed | a merged PR marks its ticket done |
+| `workflow_run` of `CI` completed | CI finished, so the QA reporter can report (set `workflows:` to your CI workflow's name) |
+| hourly cron | a safety net for a missed event |
+| Run workflow button | start it by hand, optionally with `max-runs` |
+
+A `concurrency` group keeps it to one job per repo. An event that arrives during a run waits for it, and GitHub keeps only the newest waiting run.
+
+Setup, once per repo:
+
+1. **Runner.** By default the job runs on a self-hosted runner: register the runner machine under the repo's Settings → Actions → Runners, with `forge`, Claude Code, `gh` and the app's test tools already installed. To use GitHub's machines instead, set the repo variable `FORGE_RUNS_ON` to `ubuntu-latest`. The job then installs everything itself and uploads the logs as an artifact.
+2. **`FORGE_GH_TOKEN` secret.** This is a fine-grained token with contents, issues and pull requests read/write, plus actions read. On a GitHub-hosted runner it also needs read access to system-factory. The built-in `GITHUB_TOKEN` won't do: GitHub starts no workflows for its pushes and label changes, so CI would never run on the builder's PRs.
+3. **Claude credentials.** Add `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) as a secret. A self-hosted runner that is already signed in to Claude Code needs neither.
+
+Don't run `forge dispatch --watch` on the same machine at the same time. The lock file stops the second one.
 
 ### Logs
 

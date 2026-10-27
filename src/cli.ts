@@ -18,7 +18,7 @@ import type { Tracker } from './tracker/tracker.js';
 const USAGE = `Usage: forge <command> [options]
 
 Commands
-  init [dir] [--force]                    Install the agents, the grill skill and factory.config.yml
+  init [dir] [--force]                    Install the agents, grill skill, dispatch workflow and config
   setup                                   Create the factory labels in the repo
   list [--state S] [--type spec|build] [--all]
   show <id> [--comments [--from role,role]]   --from keeps comments written by those roles

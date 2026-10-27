@@ -1,0 +1,89 @@
+# Runs the factory from GitHub events instead of a terminal loop. Installed by `forge init`.
+#
+# Each run calls `forge dispatch`, which reads the ticket labels, runs the next agent, and
+# repeats until nothing can move (waiting on CI, a merge, or a human). The events below
+# start it again when that changes. Setup and secrets: see the system-factory README.
+name: forge dispatch
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled, reopened]  # a new spec, or a person moved a ticket
+  pull_request:
+    types: [closed]                                # a merged PR marks its ticket done
+  workflow_run:
+    workflows: [CI]                                # the name of this repo's CI workflow
+    types: [completed]                             # CI finished, so QA can report
+  schedule:
+    - cron: '17 * * * *'                           # safety net for a missed event
+  workflow_dispatch:
+    inputs:
+      max-runs:
+        description: Most agent runs in this job
+        default: '25'
+
+# One dispatcher per repo. A new event waits for the running job instead of cancelling it;
+# GitHub keeps only the newest waiting run, which then sees the latest state.
+concurrency:
+  group: forge-dispatch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    # Default: your own machine registered as a self-hosted runner, with forge, Claude Code,
+    # gh and Playwright already installed. Set the repo variable FORGE_RUNS_ON=ubuntu-latest
+    # to use GitHub's machines instead.
+    runs-on: ${{ vars.FORGE_RUNS_ON || 'self-hosted' }}
+    timeout-minutes: 360
+    env:
+      # Not GITHUB_TOKEN: GitHub starts no workflows for its pushes and label changes, so CI
+      # would never run on the builder's PRs and the dispatcher would never wake again.
+      GH_TOKEN: ${{ secrets.FORGE_GH_TOKEN }}
+      FACTORY_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the token
+        if: env.GH_TOKEN == ''
+        run: |
+          echo "::error::Add a FORGE_GH_TOKEN secret (fine-grained token: contents, issues and pull requests read/write; actions read)."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FORGE_GH_TOKEN }}  # so the builder's pushes start CI
+          fetch-depth: 0
+
+      - name: Set the git author
+        run: |
+          git config user.name "forge"
+          git config user.email "forge@users.noreply.github.com"
+
+      - name: Claude credentials
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        # Only pass what is set: a self-hosted runner may already be signed in to Claude Code.
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$GITHUB_ENV"; fi
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" >> "$GITHUB_ENV"; fi
+
+      - name: Install tools (GitHub-hosted only)
+        if: runner.environment == 'github-hosted'
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          npm install -g github:hoangtrankim/system-factory
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Dispatch
+        run: forge dispatch --max-runs "${{ inputs.max-runs || '25' }}"
+
+      - name: Keep the logs (GitHub-hosted only)
+        if: always() && runner.environment == 'github-hosted'
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-logs-${{ github.run_id }}
+          path: ~/.factory/logs
+          if-no-files-found: ignore

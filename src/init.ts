@@ -1,4 +1,5 @@
-// forge init: installs the agents and the grill skill into a project's .claude folder.
+// forge init: installs the agents and the grill skill into a project's .claude folder, and the
+// dispatcher workflow into .github/workflows.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -38,6 +39,7 @@ export function init(target: string, opts: { force?: boolean; repo?: string; sou
   for (const [from, to] of [
     ['agents', '.claude/agents'],
     ['skills', '.claude/skills'],
+    ['templates/workflows', '.github/workflows'],
   ] as const) {
     const dir = join(source, from);
     for (const f of files(dir)) place(f, join(target, to, relative(dir, f)));
