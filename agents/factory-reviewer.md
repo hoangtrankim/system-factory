@@ -31,9 +31,11 @@ You are given ticket `N` in `in-review`. If it is `risky` and the security gate 
 ```sh
 git fetch origin +main:refs/remotes/origin/main +ticket-N:refs/remotes/origin/ticket-N
 git worktree add --detach /tmp/factory/review-N origin/ticket-N && cd /tmp/factory/review-N
-npm ci && CI=1 npm test > /tmp/factory/review-N.log 2>&1   # the whole suite
+npm ci && CI=1 PORT=$((4500 + N)) npm test > /tmp/factory/review-N.log 2>&1; echo "exit $?"; tail -5 /tmp/factory/review-N.log
 git rev-parse HEAD     # the SHA you reviewed
 ```
+
+Give the run its own data too, using the design note's Test setup (for example a `TODOS_FILE` under `/tmp/factory/review-N`), so it cannot clash with another agent's run. If the clone already has `ticket-N` checked out elsewhere, the detached worktree above still works; never switch branches in the main checkout.
 
 Judge scope on the three-dot range `origin/main...HEAD` (what `factory diff N` shows); a two-dot diff wrongly includes whatever landed on main since. Merge commits from main are fine. You do not wait for CI: the QA reporter judges it. When you are done, `git worktree remove --force /tmp/factory/review-N`.
 
@@ -73,7 +75,7 @@ Tests: <passed>/<total>, whole suite (`CI=1 npm test`)
      npx factory move N designed --as reviewer --reason flawed-test --note-file /tmp/factory/reviewer-N.md
      ```
 
-   - Only minor findings, or none: pass it. The planner files the Follow-ups as tickets before the spec closes.
+   - Only minor findings, or none: pass it. (The CLI refuses this for a risky ticket whose security gate has not passed.) Refer to the security note's follow-ups instead of repeating them; give `file:line` from the PR head. The planner files the Follow-ups as tickets before the spec closes.
 
      ```sh
      npx factory move N in-qa --as reviewer --note-file /tmp/factory/reviewer-N.md
