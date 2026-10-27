@@ -53,13 +53,14 @@ side states: blocked, needs-human
 | in-qa → done | system | a PR is linked (phase 3 records the merge) |
 | in-review → building | reviewer, security | a send-back reason; round + 1 |
 | in-qa → building | qa-reporter, system | a send-back reason; round + 1 |
+| building / in-review → designed | builder, reviewer | reason `flawed-test` only; round + 1, tests-ready cleared, so the QA writer fixes the test |
 | any → blocked | any agent, owner | a reason |
 | any → needs-human | any agent, owner, system | a reason |
 | blocked / needs-human → planned | planner, owner | |
 
-The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `unmarked-risk`.
+The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `unmarked-risk`, `flawed-test`.
 
-Only the qa-writer marks tests ready, only grill or owner file specs, only planner or owner file tickets and close specs.
+Only the qa-writer marks tests ready, only grill or owner file specs, only planner or owner file tickets, edit them before building (`factory edit`) and close specs. Only the builder opens a ticket's PR, from branch `ticket-N`.
 
 ## How a ticket is stored
 
@@ -102,6 +103,20 @@ npx factory note 2 --as qa-reporter --note-file evidence.md
 npx factory evidence 2 screenshot.png --as qa-reporter
 ```
 
+Reading, for agents:
+
+```sh
+npx factory show 2 --comments                # ticket plus its comments (design note, send-backs)
+npx factory show 2 --comments --from builder,reviewer
+npx factory interface 2                      # only the design note's Public interface (for the blind QA writer)
+npx factory pr 2 --as builder --body-file pr.md   # open or find the PR for branch ticket-2
+npx factory diff 2                           # the PR's diff
+npx factory checks 2                         # CI checks; exit 3 if one failed, 4 while running
+npx factory edit 2 --as planner --not-risky --note "Deleting your own todo is not risky"
+```
+
+Every GitHub call uses the REST API (`gh api`), never GraphQL, so it works on networks that block GraphQL; agent prompts use these commands instead of `gh issue` and `gh pr`.
+
 `--note-file` works anywhere `--note` does.
 
 The repo comes from `--repo`, then `FACTORY_REPO`, then `repo:` in `factory.config.yml`, then the `origin` remote. GitHub calls go through `gh api`, so run `gh auth login` first. A refused move exits with code 2 and says why.
@@ -110,7 +125,11 @@ The repo comes from `--repo`, then `FACTORY_REPO`, then `repo:` in `factory.conf
 
 ```yaml
 repo: owner/name
+base: main          # branch PRs target
 maxRounds: 3
+components:         # name -> paths it owns; tickets use these names, the reviewer checks PR scope
+  ui: ["public/**"]
+  server: ["server.js"]
 ```
 
 ## Development

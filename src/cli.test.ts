@@ -77,10 +77,10 @@ describe('notes, evidence and init', () => {
     const file = join(cwd, 'design.md');
     writeFileSync(file, '## Design note\nUse the list API.');
     await exec(`move 2 designed --as designer --note-file ${file}`);
-    expect(tracker.comments.get(2)?.at(-1)).toContain('## Design note');
+    expect(tracker.posted.get(2)?.at(-1)).toContain('## Design note');
     await expect(exec('note 2 --as reviewer')).rejects.toThrow(/needs --note/);
     await exec(`note 2 --as qa-reporter --note-file ${file}`);
-    expect(tracker.comments.get(2)?.at(-1)).toMatch(/^\*\*qa-reporter\*\* noted/);
+    expect(tracker.posted.get(2)?.at(-1)).toMatch(/^\*\*qa-reporter\*\* noted/);
   });
 
   it('uploads evidence as qa-reporter only', async () => {

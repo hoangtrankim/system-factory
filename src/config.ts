@@ -9,6 +9,10 @@ import { DEFAULT_MAX_ROUNDS } from './lifecycle.js';
 export interface Config {
   repo?: string;
   maxRounds: number;
+  base: string;
+  // Component name -> paths it owns. The planner tags tickets with these names, and the
+  // reviewer checks that a PR only touches paths of its ticket's components.
+  components: Record<string, string[]>;
 }
 
 export const CONFIG_FILE = 'factory.config.yml';
@@ -18,7 +22,25 @@ export function loadConfig(dir = process.cwd()): Config {
   const raw = existsSync(file) ? ((parse(readFileSync(file, 'utf8')) ?? {}) as Record<string, unknown>) : {};
   const maxRounds = Number(raw.maxRounds ?? DEFAULT_MAX_ROUNDS);
   if (!Number.isInteger(maxRounds) || maxRounds < 1) throw new Error(`${CONFIG_FILE}: maxRounds must be a positive integer`);
-  return { repo: typeof raw.repo === 'string' ? raw.repo : undefined, maxRounds };
+  const components: Record<string, string[]> = {};
+  if (raw.components !== undefined) {
+    if (typeof raw.components !== 'object' || raw.components === null || Array.isArray(raw.components)) {
+      throw new Error(`${CONFIG_FILE}: components must map a name to a list of paths`);
+    }
+    for (const [name, paths] of Object.entries(raw.components)) {
+      const list = typeof paths === 'string' ? [paths] : paths;
+      if (!Array.isArray(list) || !list.every((p) => typeof p === 'string')) {
+        throw new Error(`${CONFIG_FILE}: components.${name} must be a list of paths`);
+      }
+      components[name] = list;
+    }
+  }
+  return {
+    repo: typeof raw.repo === 'string' ? raw.repo : undefined,
+    maxRounds,
+    base: typeof raw.base === 'string' ? raw.base : 'main',
+    components,
+  };
 }
 
 // owner/name from --repo, FACTORY_REPO, the config file, or the origin remote, in that order.

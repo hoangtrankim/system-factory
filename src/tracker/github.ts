@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process';
 import type { Ticket } from '../lifecycle.js';
 import { FIXED_LABELS, fromBody, fromLabels, isFactoryLabel, toLabels, withBodyFields } from '../labels.js';
-import { NotFoundError, type ListFilter, type NewTicket, type Tracker } from './tracker.js';
+import { NotFoundError, type Comment, type ListFilter, type NewTicket, type Tracker } from './tracker.js';
 
 export const EVIDENCE_BRANCH = 'factory-evidence';
 
@@ -12,6 +12,8 @@ export interface GhRequest {
   path: string;
   body?: unknown;
   paginate?: boolean;
+  // A non-JSON media type (such as a diff) returns the raw text.
+  accept?: string;
 }
 
 export type GhApi = (req: GhRequest) => Promise<unknown>;
@@ -28,6 +30,7 @@ export class GhError extends Error {
 export const ghCli: GhApi = (req) =>
   new Promise((resolve, reject) => {
     const args = ['api', '-X', req.method ?? 'GET', req.path];
+    if (req.accept) args.push('-H', `Accept: ${req.accept}`);
     if (req.paginate) args.push('--paginate', '--slurp');
     if (req.body !== undefined) args.push('--input', '-');
     const child = execFile('gh', args, { maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -37,6 +40,7 @@ export const ghCli: GhApi = (req) =>
         return;
       }
       if (!stdout.trim()) return resolve(undefined);
+      if (req.accept && !req.accept.includes('json')) return resolve(stdout);
       const data = JSON.parse(stdout);
       resolve(req.paginate && Array.isArray(data) ? data.flat() : data);
     });
@@ -151,6 +155,15 @@ export class GitHubTracker implements Tracker {
 
   async comment(id: number, body: string): Promise<void> {
     await this.gh({ method: 'POST', path: this.path(`issues/${id}/comments`), body: { body } });
+  }
+
+  async comments(id: number): Promise<Comment[]> {
+    const list = (await this.gh({ path: this.path(`issues/${id}/comments?per_page=100`), paginate: true })) as Array<{
+      user: { login: string } | null;
+      body: string | null;
+      created_at: string;
+    }>;
+    return list.map((c) => ({ author: c.user?.login ?? 'ghost', body: c.body ?? '', createdAt: c.created_at }));
   }
 
   async close(id: number): Promise<void> {

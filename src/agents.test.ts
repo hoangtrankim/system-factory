@@ -59,6 +59,12 @@ describe('agent prompts', () => {
         expect(a.body).toContain(`lessons/${role(a)}.md`);
       });
 
+      it('reads GitHub over REST only and keeps temp files out of the repo', () => {
+        expect(a.body).not.toMatch(/`gh (issue|pr) /);
+        expect(a.body).not.toMatch(/^\s*gh (issue|pr) /m);
+        expect(a.body).toContain(`/tmp/factory/${role(a)}-`);
+      });
+
       if (READ_ONLY.includes(role(a))) {
         it('cannot edit files', () => {
           expect(tools(a)).not.toContain('Edit');
@@ -72,6 +78,19 @@ describe('agent prompts', () => {
     const qa = agents.find((a) => role(a) === 'qa-writer')!;
     expect(qa.body).toMatch(/must \*\*not\*\* read application source code/);
     expect(tools(qa)).not.toContain('Grep');
+  });
+
+  it('sends flawed acceptance tests back to the qa-writer', () => {
+    for (const r of ['builder', 'reviewer']) {
+      const a = agents.find((x) => role(x) === r)!;
+      expect(a.body).toContain(`npx factory move N designed --as ${r} --reason flawed-test`);
+    }
+  });
+
+  it('marks acceptance-test commits so the reviewer can tell them apart', () => {
+    for (const r of ['qa-writer', 'reviewer']) {
+      expect(agents.find((x) => role(x) === r)!.body).toContain('Add acceptance tests for #N');
+    }
   });
 
   it('forbids the builder from touching acceptance tests', () => {
