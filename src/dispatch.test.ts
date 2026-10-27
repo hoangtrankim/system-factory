@@ -186,3 +186,22 @@ describe('runner and lock', () => {
     new Lock(file).acquire();
   });
 });
+
+describe('ClaudeRunner', () => {
+  it('passes the prompt on stdin, after variadic flags', async () => {
+    const { ClaudeRunner } = await import('./runner.js');
+    // A stand-in for claude that echoes its stdin and args as the JSON result.
+    const dir = mkdtempSync(join(tmpdir(), 'factory-claude-'));
+    const bin = join(dir, 'claude');
+    const { writeFileSync, chmodSync } = await import('node:fs');
+    writeFileSync(bin, `#!/usr/bin/env node
+let input = '';
+process.stdin.on('data', (d) => (input += d)).on('end', () =>
+  console.log(JSON.stringify({ result: input + ' | ' + process.argv.slice(2).join(' '), is_error: false })));
+`);
+    chmodSync(bin, 0o755);
+    const r = await new ClaudeRunner(bin).run({ agent: 'factory-designer', prompt: 'Ticket 8.', cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toBe('Ticket 8. | -p --agent factory-designer --output-format json --permission-mode acceptEdits --allowedTools Bash');
+  });
+});

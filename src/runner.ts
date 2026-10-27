@@ -36,10 +36,12 @@ export class ClaudeRunner implements AgentRunner {
   ) {}
 
   run(req: RunRequest): Promise<RunResult> {
-    const args = ['-p', '--agent', req.agent, '--output-format', 'json', ...this.extraArgs, req.prompt];
+    // The prompt goes on stdin: a variadic flag such as --allowedTools would swallow it as an argument.
+    const args = ['-p', '--agent', req.agent, '--output-format', 'json', ...this.extraArgs];
     const started = Date.now();
     return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { cwd: req.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(this.bin, args, { cwd: req.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child.stdin.end(req.prompt);
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (d) => (stdout += d));
