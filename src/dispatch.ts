@@ -1,0 +1,187 @@
+// The dispatcher: reads the tickets, asks the router for the next step, runs that agent, and
+// repeats. One agent at a time on one runner machine. It never merges; it only marks a ticket
+// done once the owner (or, later, the merge queue) has merged its PR.
+
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import type { CodeHost } from './codehost.js';
+import type { Factory } from './factory.js';
+import { specStatus, type Ticket } from './lifecycle.js';
+import type { JsonlLog } from './logs.js';
+import { route, waitingOnOwner, type PrFacts, type Snapshot, type Step } from './router.js';
+import type { AgentRunner, RunResult } from './runner.js';
+import type { Tracker } from './tracker/tracker.js';
+
+export interface DispatchOptions {
+  maxRuns?: number;
+  // Keep polling for merges and new specs instead of stopping when nothing can move.
+  watch?: boolean;
+  intervalMs?: number;
+  // Print the next step without running it.
+  dryRun?: boolean;
+}
+
+export interface RunRecord {
+  step: Step & { kind: 'agent' };
+  result: RunResult;
+  changed: boolean;
+}
+
+export interface DispatchReport {
+  next?: Step;
+  runs: RunRecord[];
+  markedDone: number[];
+  stuck: string[];
+  toMerge: number[];
+  needsHuman: number[];
+  stoppedBy: 'idle' | 'max-runs' | 'dry-run';
+}
+
+export interface DispatcherDeps {
+  tracker: Tracker;
+  factory: Factory;
+  codeHost: CodeHost;
+  runner: AgentRunner;
+  cwd: string;
+  log?: JsonlLog;
+  out?: (s: string) => void;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => Date;
+}
+
+const fingerprint = (t: Ticket | undefined) =>
+  t ? JSON.stringify([t.state, t.round, t.testsReady, t.gates, t.pr, t.risky, t.blockedBy, t.closed]) : '';
+
+export class Dispatcher {
+  constructor(private readonly d: DispatcherDeps) {}
+
+  private out(s: string) {
+    this.d.out?.(s);
+  }
+
+  async snapshot(): Promise<Snapshot> {
+    const tickets = await this.d.tracker.list({ includeClosed: true });
+    const specs = tickets.filter((t) => t.type === 'spec' && !t.closed).map((spec) => ({ spec, status: specStatus(spec, tickets) }));
+    const prs = new Map<number, PrFacts>();
+    const reported = new Map<number, Set<string>>();
+    for (const t of tickets.filter((x) => x.type === 'build' && x.state === 'in-qa' && x.pr)) {
+      const pr = await this.d.codeHost.getPr(t.pr!);
+      const checks = pr.merged ? [] : await this.d.codeHost.checks(pr.number);
+      prs.set(t.id, {
+        headSha: pr.headSha,
+        merged: pr.merged,
+        checksDone: checks.length > 0 && checks.every((c) => c.status === 'completed'),
+      });
+      const notes = (await this.d.tracker.comments(t.id)).filter((c) => c.body.startsWith('**qa-reporter**'));
+      reported.set(t.id, new Set(notes.some((c) => c.body.includes(pr.headSha)) ? [pr.headSha] : []));
+    }
+    return { tickets, specs, prs, reported };
+  }
+
+  async run(opts: DispatchOptions = {}): Promise<DispatchReport> {
+    const maxRuns = opts.maxRuns ?? 25;
+    const report: DispatchReport = { runs: [], markedDone: [], stuck: [], toMerge: [], needsHuman: [], stoppedBy: 'idle' };
+    // "agent:ticket" -> the ticket's fingerprint when that agent last changed nothing.
+    const gaveUp = new Map<string, string>();
+
+    for (;;) {
+      const snap = await this.snapshot();
+      const byId = new Map(snap.tickets.map((t) => [t.id, t]));
+      const skip = new Set([...gaveUp].filter(([k, fp]) => fingerprint(byId.get(Number(k.split(':')[1]))) === fp).map(([k]) => k));
+      const step = route(snap, skip);
+      Object.assign(report, waitingOnOwner(snap));
+
+      if (opts.dryRun) {
+        report.next = step;
+        report.stoppedBy = 'dry-run';
+        return report;
+      }
+      if (!step) {
+        if (!opts.watch) return report;
+        await (this.d.sleep ?? sleep)(opts.intervalMs ?? 5 * 60 * 1000);
+        continue;
+      }
+      if (step.kind === 'mark-done') {
+        const t = byId.get(step.ticket)!;
+        await this.d.factory.move(step.ticket, { to: 'done', role: 'system', note: `PR #${t.pr} is merged.` });
+        report.markedDone.push(step.ticket);
+        this.out(`#${step.ticket} done (PR #${t.pr} merged)`);
+        continue;
+      }
+      if (!opts.watch && report.runs.length >= maxRuns) {
+        report.stoppedBy = 'max-runs';
+        return report;
+      }
+
+      const record = await this.runAgent(step, snap);
+      report.runs.push(record);
+      if (!record.changed) {
+        const key = `${step.agent}:${step.ticket}`;
+        const after = (await this.d.tracker.list({ includeClosed: true })).find((t) => t.id === step.ticket);
+        gaveUp.set(key, fingerprint(after));
+        report.stuck.push(key);
+        this.out(`  stuck: factory-${step.agent} changed nothing on #${step.ticket}; skipping it until the ticket changes`);
+      }
+    }
+  }
+
+  private async runAgent(step: Step & { kind: 'agent' }, before: Snapshot): Promise<RunRecord> {
+    const name = `factory-${step.agent}`;
+    this.out(`#${step.ticket} ${step.rule}: running ${name}`);
+    await this.d.factory.note(step.ticket, 'system', `Started \`${name}\` (${step.rule}).`);
+    const commentsBefore = (await this.d.tracker.comments(step.ticket)).length;
+
+    const result = await this.d.runner.run({ agent: name, prompt: step.prompt, cwd: this.d.cwd });
+
+    const after = await this.d.tracker.list({ includeClosed: true });
+    const ticketsChanged = JSON.stringify(after.map((t) => [t.id, fingerprint(t)])) !==
+      JSON.stringify(before.tickets.map((t) => [t.id, fingerprint(t)]));
+    const changed = ticketsChanged || (await this.d.tracker.comments(step.ticket)).length > commentsBefore;
+
+    this.d.log?.write('runs', {
+      at: (this.d.now?.() ?? new Date()).toISOString(),
+      ticket: step.ticket,
+      agent: step.agent,
+      rule: step.rule,
+      ok: result.ok,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      costUsd: result.costUsd,
+      turns: result.turns,
+      sessionId: result.sessionId,
+      changed,
+      summary: result.summary,
+    });
+    this.out(`  ${result.ok ? 'ok' : `failed (exit ${result.exitCode})`}: ${result.summary}`);
+    return { step, result, changed };
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// One dispatcher per repo per machine: a second one would run agents on the same tickets.
+export class Lock {
+  constructor(private readonly file: string) {}
+
+  acquire(): void {
+    if (existsSync(this.file)) {
+      const pid = Number(readFileSync(this.file, 'utf8'));
+      if (pid && alive(pid)) throw new Error(`another dispatcher is running (pid ${pid}); lock file ${this.file}`);
+    }
+    mkdirSync(dirname(this.file), { recursive: true });
+    writeFileSync(this.file, String(process.pid));
+  }
+
+  release(): void {
+    rmSync(this.file, { force: true });
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
