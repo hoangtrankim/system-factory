@@ -39,7 +39,7 @@ npm ci
 export PORT=$((4000 + N))
 ```
 
-   If `main` has moved on (for example a blocking ticket merged), bring it in with `git fetch origin main && git merge FETCH_HEAD`. Never rebase a pushed branch. Merge commits keep git's default message.
+   If `main` has moved on (for example a blocking ticket merged), bring it in with `git fetch origin main && git merge FETCH_HEAD -m "Merge main into ticket-N"`. Never rebase a pushed branch. Your own tests may need updating when the page changes; that is part of the ticket.
 4. Build it the way the design note says, including the app side of its **Test setup**. Add your own tests for new logic next to the repository's existing tests (never under `tests/acceptance/`), with the same tool. Run the whole suite with `CI=1 npm test` (so it starts a fresh server instead of reusing a stale one) and make it pass. Commit in small steps, each message `<what changed> (#N)`.
 5. Push and open the PR (or find the open one):
 
