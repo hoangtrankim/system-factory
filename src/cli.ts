@@ -2,16 +2,19 @@
 // factory: the only way agents change tickets. Every command that changes something needs --as.
 
 import { readFileSync, realpathSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, resolveRepo } from './config.js';
 import { Factory, RuleError } from './factory.js';
 import { GATES, ROLES, STATES, isRole, isState, type Gate, type Priority, type Role, type Ticket } from './lifecycle.js';
+import { init } from './init.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
 
 const USAGE = `Usage: factory <command> [options]
 
 Commands
+  init [dir] [--force]                    Install the agents, the grill skill and factory.config.yml
   setup                                   Create the factory labels in the repo
   list [--state S] [--type spec|build] [--all]
   show <id>
@@ -19,9 +22,11 @@ Commands
   create --as R --title T [--body B | --body-file F] [--type spec]
          [--spec N --covers AC-1,AC-2] [--blocked-by 1,2] [--component C]...
          [--priority p0..p3] [--risky]
-  move <id> <state> --as R [--reason R] [--note N] [--pr N]
-  tests-ready <id> --as qa-writer [--note N]
-  gate <id> <gate> pass|fail --as R [--reason R] [--note N]
+  move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
+  tests-ready <id> --as qa-writer [--note N | --note-file F]
+  gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
+  note <id> --as R (--note N | --note-file F)   Comment on a ticket
+  evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
   close-spec <id> --as R
 
@@ -37,7 +42,7 @@ interface Args {
   flags: Map<string, string[]>;
 }
 
-const BOOLEAN_FLAGS = new Set(['risky', 'json', 'all', 'help']);
+const BOOLEAN_FLAGS = new Set(['risky', 'json', 'all', 'help', 'force']);
 
 export function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -66,6 +71,11 @@ class UsageError extends Error {}
 
 const flag = (a: Args, name: string) => a.flags.get(name)?.at(-1);
 const flagAll = (a: Args, name: string) => (a.flags.get(name) ?? []).flatMap((v) => v.split(',')).map((s) => s.trim()).filter(Boolean);
+
+function note(a: Args): string | undefined {
+  const file = flag(a, 'note-file');
+  return file ? readFileSync(file, 'utf8') : flag(a, 'note');
+}
 
 function role(a: Args): Role {
   const r = flag(a, 'as');
@@ -112,6 +122,14 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
   if (!cmd || flag(a, 'help')) {
     out(USAGE);
     return cmd || flag(a, 'help') ? 0 : 1;
+  }
+
+  if (cmd === 'init') {
+    const dir = resolve(deps.cwd ?? process.cwd(), rest[0] ?? '.');
+    const r = init(dir, { force: flag(a, 'force') === 'true', repo: flag(a, 'repo') });
+    for (const f of r.written) out(`wrote   ${f}`);
+    for (const f of r.skipped) out(`kept    ${f} (exists; --force to overwrite)`);
+    return 0;
   }
 
   const config = loadConfig(deps.cwd);
@@ -185,7 +203,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
           to,
           role: role(a),
           reason: flag(a, 'reason'),
-          note: flag(a, 'note'),
+          note: note(a),
           pr: pr ? id(pr, '--pr') : undefined,
         }),
       );
@@ -193,14 +211,29 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     }
 
     case 'tests-ready':
-      print(await factory.markTestsReady(id(rest[0]), role(a), flag(a, 'note')));
+      print(await factory.markTestsReady(id(rest[0]), role(a), note(a)));
       return 0;
 
     case 'gate': {
       const [ticket, gate, result] = rest;
       if (!gate || !(GATES as readonly string[]).includes(gate)) throw new UsageError(`gate must be one of ${GATES.join(', ')}`);
       if (result !== 'pass' && result !== 'fail') throw new UsageError('gate result must be pass or fail');
-      print(await factory.recordGate(id(ticket), gate as Gate, result, role(a), flag(a, 'reason'), flag(a, 'note')));
+      print(await factory.recordGate(id(ticket), gate as Gate, result, role(a), flag(a, 'reason'), note(a)));
+      return 0;
+    }
+
+    case 'note': {
+      const text = note(a);
+      if (!text) throw new UsageError('note needs --note or --note-file');
+      await factory.note(id(rest[0]), role(a), text);
+      out('Noted.');
+      return 0;
+    }
+
+    case 'evidence': {
+      const file = rest[1];
+      if (!file) throw new UsageError('evidence <id> <file>');
+      out(await factory.evidence(id(rest[0]), role(a), basename(file), readFileSync(resolve(deps.cwd ?? process.cwd(), file))));
       return 0;
     }
 

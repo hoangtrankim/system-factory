@@ -6,6 +6,7 @@ import {
   applyMove,
   canCloseSpec,
   canCreate,
+  canUploadEvidence,
   canMarkTestsReady,
   canMove,
   canRecordGate,
@@ -27,7 +28,8 @@ export class RuleError extends Error {}
 
 export interface FactoryEvent {
   at: string;
-  kind: 'create' | 'move' | 'mark' | 'gate' | 'close-spec';
+  kind: 'create' | 'move' | 'mark' | 'gate' | 'close-spec' | 'note' | 'evidence';
+  file?: string;
   ticket: number;
   role: Role;
   from?: State;
@@ -172,6 +174,21 @@ export class Factory {
     await this.tracker.comment(id, `**${role}** closed this spec: every criterion is covered and every ticket is done.`);
     this.emit({ kind: 'close-spec', ticket: id, role, from: spec.state, to: 'done' });
     return saved;
+  }
+
+  async note(id: number, role: Role, text: string): Promise<void> {
+    if (!text.trim()) throw new RuleError('a note needs text');
+    await this.tracker.get(id);
+    await this.tracker.comment(id, `**${role}** noted:\n\n${text}`);
+    this.emit({ kind: 'note', ticket: id, role });
+  }
+
+  async evidence(id: number, role: Role, name: string, content: Buffer): Promise<string> {
+    check(canUploadEvidence(role));
+    await this.tracker.get(id);
+    const url = await this.tracker.upload(id, name, content);
+    this.emit({ kind: 'evidence', ticket: id, role, file: name });
+    return url;
   }
 
   async next(limit?: number): Promise<Ticket[]> {

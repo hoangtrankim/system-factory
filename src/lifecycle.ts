@@ -231,6 +231,11 @@ export function canCreate(type: TicketType, role: Role): Check {
   return ok;
 }
 
+export function canUploadEvidence(role: Role): Check {
+  if (role !== 'qa-reporter' && role !== 'system' && role !== 'owner') return refuse(`only qa-reporter may upload evidence`);
+  return ok;
+}
+
 // Acceptance criteria are lines in the spec body that start with "AC-<n>".
 export function acceptanceCriteria(specBody: string): string[] {
   const found = new Set<string>();

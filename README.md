@@ -8,13 +8,30 @@ The idea, borrowed from [Kiln](https://github.com/thuongdinh/kiln-software-facto
 
 ## Status
 
-Phase 1 of 5 is here: the rules script, the labels and the GitHub tracker.
+Phases 1 and 2 of 5 are here.
 
-1. Rules script, labels, GitHub tracker adapter, unit tests (this)
+1. Rules script, labels, GitHub tracker adapter, unit tests
 2. Agent prompts: Grill, Planner, Designer, QA test writer, Builder, Reviewer, QA reporter, Security reviewer
 3. CI gate, branch protection and merge queue
 4. Dispatcher loop on the Mac mini, plus logs
 5. Parallel improvements, then retro and lessons
+
+## Agents
+
+Each role is a Claude Code subagent in `agents/`, plus the Grill skill in `skills/`. `factory init` copies them into a project's `.claude/` folder. Every agent changes tickets only through `npx factory ... --as <its role>`, reads `lessons/<role>.md` if it exists, and ends with a one-line report.
+
+| Agent | Picks up | Does | Tools |
+| --- | --- | --- | --- |
+| Grill (skill, main session) | an idea from the owner | grills the owner, writes the spec with `AC-n` criteria, files it | session |
+| `factory-planner` | a new spec, a blocked ticket, a finished spec | splits the spec into PR-sized tickets with coverage, priority, components, blockers, `risky` | read only + `factory` |
+| `factory-designer` | `planned` | design note: public interface, files, approach, risks | read + temp files |
+| `factory-qa-writer` | `designed` without tests | blind acceptance tests from the spec and the public interface only, pushed to `ticket-N` | no `Grep`, no `Edit` |
+| `factory-builder` | `factory next`, or a send-back | builds in a worktree on top of the tests, opens the PR; never touches `tests/acceptance/` | full |
+| `factory-security` | `risky` tickets in `in-review` | security gate pass or fail, plus a risk note for the weekly digest | read only, opus |
+| `factory-reviewer` | `in-review` (after security on risky) | fresh read-only review; blocking findings send it back with a typed reason | read only, opus |
+| `factory-qa-reporter` | `in-qa` | turns the CI run into per-AC evidence; red CI goes back to building | read only |
+
+Read-only agents still have `Bash` so they can run `factory`, `gh` and tests. The prompts forbid writes; guard hooks that block them mechanically come in a later phase.
 
 ## Ticket lifecycle
 
@@ -62,9 +79,17 @@ All GitHub access goes through the `Tracker` interface in `src/tracker/tracker.t
 
 ## Usage
 
+In the project the factory will work on:
+
 ```sh
-npm install && npm run build
-npx factory setup --repo owner/name          # create the labels once
+npm install -D github:hoangtrankim/system-factory
+npx factory init --repo owner/name           # agents, grill skill, factory.config.yml
+npx factory setup                            # create the labels once
+```
+
+Then, by hand until the dispatcher exists:
+
+```sh
 npx factory create --as grill --type spec --title "Todo app" --body-file spec.md
 npx factory create --as planner --title "Add a todo" --spec 1 --covers AC-1 --component ui
 npx factory move 2 designed --as designer
@@ -73,7 +98,11 @@ npx factory next                             # tickets a builder may start now
 npx factory move 2 building --as builder
 npx factory move 2 in-review --as builder --pr 5
 npx factory move 2 building --as reviewer --reason missing-test --note "No test for empty input"
+npx factory note 2 --as qa-reporter --note-file evidence.md
+npx factory evidence 2 screenshot.png --as qa-reporter
 ```
+
+`--note-file` works anywhere `--note` does.
 
 The repo comes from `--repo`, then `FACTORY_REPO`, then `repo:` in `factory.config.yml`, then the `origin` remote. GitHub calls go through `gh api`, so run `gh auth login` first. A refused move exits with code 2 and says why.
 

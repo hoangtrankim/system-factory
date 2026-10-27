@@ -69,6 +69,39 @@ describe('run', () => {
   });
 });
 
+describe('notes, evidence and init', () => {
+  it('reads a note from a file and posts notes', async () => {
+    const { exec, tracker, cwd } = harness();
+    await exec('create --as grill --type spec --title Todo --body AC-1');
+    await exec('create --as planner --title Add --spec 1 --covers AC-1');
+    const file = join(cwd, 'design.md');
+    writeFileSync(file, '## Design note\nUse the list API.');
+    await exec(`move 2 designed --as designer --note-file ${file}`);
+    expect(tracker.comments.get(2)?.at(-1)).toContain('## Design note');
+    await expect(exec('note 2 --as reviewer')).rejects.toThrow(/needs --note/);
+    await exec(`note 2 --as qa-reporter --note-file ${file}`);
+    expect(tracker.comments.get(2)?.at(-1)).toMatch(/^\*\*qa-reporter\*\* noted/);
+  });
+
+  it('uploads evidence as qa-reporter only', async () => {
+    const { exec, tracker, cwd, lines } = harness();
+    await exec('create --as grill --type spec --title Todo');
+    writeFileSync(join(cwd, 'shot.png'), 'png');
+    await expect(exec('evidence 1 shot.png --as builder')).rejects.toThrow(/only qa-reporter/);
+    await exec('evidence 1 shot.png --as qa-reporter');
+    expect(lines.at(-1)).toBe('memory://1/shot.png');
+    expect(tracker.uploads.get('1/shot.png')?.toString()).toBe('png');
+  });
+
+  it('runs init without a repo or tracker', async () => {
+    const lines: string[] = [];
+    const cwd = mkdtempSync(join(tmpdir(), 'factory-'));
+    await run(['init', '--repo', 'o/r'], { out: (s) => lines.push(s), cwd });
+    expect(lines).toContain('wrote   .claude/agents/factory-reviewer.md');
+    expect(lines).toContain('wrote   factory.config.yml');
+  });
+});
+
 describe('parseRemote', () => {
   it('reads https and ssh remotes', () => {
     expect(parseRemote('https://github.com/hoangtrankim/system-factory.git')).toBe('hoangtrankim/system-factory');
