@@ -51,7 +51,7 @@ describe('agent prompts', () => {
       });
 
       it('names only real states and send-back reasons', () => {
-        for (const m of a.body.matchAll(/npx factory move \S+ ([\w-]+)/g)) expect(STATES).toContain(m[1]);
+        for (const m of a.body.matchAll(/forge move \S+ ([\w-]+)/g)) expect(STATES).toContain(m[1]);
         for (const m of a.body.matchAll(/--reason ([\w-]+)/g)) expect(SEND_BACK_REASONS).toContain(m[1]);
       });
 
@@ -83,7 +83,7 @@ describe('agent prompts', () => {
   it('sends flawed acceptance tests back to the qa-writer', () => {
     for (const r of ['builder', 'reviewer']) {
       const a = agents.find((x) => role(x) === r)!;
-      expect(a.body).toContain(`npx factory move N designed --as ${r} --reason flawed-test`);
+      expect(a.body).toContain(`forge move N designed --as ${r} --reason flawed-test`);
     }
   });
 
@@ -104,7 +104,7 @@ describe('grill skill', () => {
 
   it('files specs as grill', () => {
     expect(skill.meta.name).toBe('factory-grill');
-    expect(skill.body).toContain('npx factory create --as grill --type spec');
+    expect(skill.body).toContain('forge create --as grill --type spec');
   });
 
   it('asks for AC-n criteria', () => {

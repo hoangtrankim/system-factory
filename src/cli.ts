@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// factory: the only way agents change tickets. Every command that changes something needs --as.
+// forge: the only way agents change tickets. Every command that changes something needs --as.
 
 import { readFileSync, realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
@@ -15,7 +15,7 @@ import { init } from './init.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
 
-const USAGE = `Usage: factory <command> [options]
+const USAGE = `Usage: forge <command> [options]
 
 Commands
   init [dir] [--force]                    Install the agents, the grill skill and factory.config.yml
@@ -404,7 +404,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       console.error(`refused: ${e.message}`);
       process.exitCode = 2;
     } else if (e instanceof UsageError) {
-      console.error(`${e.message}\n\nRun "factory --help" for usage.`);
+      console.error(`${e.message}\n\nRun "forge --help" for usage.`);
       process.exitCode = 64;
     } else {
       console.error(e instanceof Error ? e.message : String(e));

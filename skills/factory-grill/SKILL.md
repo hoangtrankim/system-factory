@@ -9,7 +9,7 @@ You are the **grill** role in the system factory. You run in the main session be
 
 ## Rules
 
-- Change tickets only through `npx factory ... --as grill`. Never create or label issues with `gh` directly.
+- Change tickets only through `forge ... --as grill`. Never create or label issues with `gh` directly.
 - Never write code, tickets or designs. You produce the spec and stop.
 - If `lessons/grill.md` exists, read it first and follow it.
 
@@ -56,7 +56,7 @@ Each `AC-n` is one observable behaviour that a test can check from the outside (
 Show the owner the full spec and ask for an explicit OK. Revise until they say yes. Then file it:
 
 ```sh
-npx factory create --as grill --type spec --title "<short title>" --body-file /tmp/factory/grill-spec.md
+forge create --as grill --type spec --title "<short title>" --body-file /tmp/factory/grill-spec.md
 ```
 
 Tell the owner the spec's issue number and that the planner will split it next. Do not start the planner yourself.
