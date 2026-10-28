@@ -151,7 +151,7 @@ side states: blocked, needs-human
 | any → needs-human | any agent, owner, system | a reason |
 | blocked / needs-human → planned | planner, owner | |
 
-The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `unmarked-risk`, `flawed-test`.
+The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `quality`, `unmarked-risk`, `flawed-test`.
 
 Only the grill or owner file specs. Only the planner or owner file tickets, edit them before building and close specs. Only the qa-writer marks tests ready, and only the builder opens a ticket's PR, from branch `ticket-N`.
 

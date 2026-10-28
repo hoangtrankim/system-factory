@@ -51,6 +51,17 @@ Judge scope on the three-dot range `origin/main...HEAD` (what `forge diff N` sho
 | The code follows the design note and its **must** risks, or the PR explains why not | `design` |
 | It is risky by the planner's definition (login, permissions, payments, secrets, personal data, bulk or irreversible deletion) but the ticket is not `risky` | `unmarked-risk` |
 | Bugs: wrong results, unhandled errors, races, data loss | `wrong-behavior` |
+| A quality rule below is broken in code this PR adds or changes | `quality` |
+
+   **Quality rules.** These block, because nobody else reads the code before it merges. Apply them only to code the PR adds or changes, and only as written here:
+
+   - **Duplicated logic**: the same logic written twice where one shared function would do (not two similar lines).
+   - **Dead code**: unreachable code, unused functions or variables, or commented-out code.
+   - **Mixed jobs**: one function doing several unrelated jobs (for example parsing a request, writing storage and rendering the response) that should be split.
+   - **Misleading names**: a name that hides or contradicts what the code does (`getTodos` that also deletes, `data`, `tmp2`).
+   - **Swallowed errors**: an error caught and ignored, or turned into a success, with no comment saying why that is safe.
+
+   Lint, format, types and the coverage floor are CI's job; do not repeat them here. Anything not on this list (style, structure you would have done differently) is a Follow-up, never a send-back.
 
 4. Sort what you found into **blocking** (any row above, or a real bug) and **minor** (small robustness gaps, naming, cleanups).
 5. Write the note in this shape:
@@ -81,4 +92,4 @@ Tests: <passed>/<total>, whole suite (`CI=1 npm test`)
      forge move N in-qa --as reviewer --note-file /tmp/factory/reviewer-N.md
      ```
 
-Be specific and fair: a finding names the exact problem and the fix. Do not send work back for taste.
+Be specific and fair: a finding names the exact problem and the fix. Send back only for the checks above, including the quality rules as written; everything else, including taste, is a Follow-up.

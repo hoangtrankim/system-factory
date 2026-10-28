@@ -40,6 +40,7 @@ export const SEND_BACK_REASONS = [
   'failing-check',
   'scope-creep',
   'design',
+  'quality',
   'unmarked-risk',
   'flawed-test',
 ] as const;

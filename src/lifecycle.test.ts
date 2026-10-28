@@ -104,6 +104,7 @@ describe('canMove', () => {
     expect(canMove(t, { to: 'building', role: 'reviewer' }).ok).toBe(false);
     expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'looks off' }).ok).toBe(false);
     expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'missing-test' }).ok).toBe(true);
+    expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'quality' }).ok).toBe(true);
   });
 
   it('needs a reason to block or escalate', () => {
