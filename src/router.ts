@@ -12,6 +12,8 @@ export interface PrFacts {
   checksDone: boolean;
   // Every check finished and passed.
   checksGreen: boolean;
+  // Main moved on since the branch was made; branch protection refuses to merge it as it is.
+  behind?: boolean;
 }
 
 export interface Snapshot {
@@ -27,7 +29,8 @@ export type Step =
   | { kind: 'agent'; agent: AgentRole; ticket: number; prompt: string; rule: string }
   | { kind: 'mark-done'; ticket: number; rule: string }
   | { kind: 'merge'; ticket: number; rule: string }
-  | { kind: 're-review'; ticket: number; rule: string };
+  | { kind: 're-review'; ticket: number; rule: string }
+  | { kind: 'update-branch'; ticket: number; rule: string };
 
 interface Rule {
   name: string;
@@ -64,6 +67,13 @@ export const ROUTES: readonly Rule[] = [
     name: 'pushed-after-review',
     match: (t, s) => build(t) && t.state === 'in-qa' && !reviewedHead(t, s) && !s.prs.get(t.id)?.merged && s.prs.has(t.id),
     step: (t) => ({ kind: 're-review', ticket: t.id, rule: 'pushed-after-review' }),
+  },
+  {
+    // Reviewed, but main moved on: bring main in first. That is a new head, so it is reviewed
+    // and tested again before it can merge, without costing a round.
+    name: 'behind-main',
+    match: (t, s) => build(t) && t.state === 'in-qa' && reviewedHead(t, s) && !s.prs.get(t.id)?.merged && !!s.prs.get(t.id)?.behind,
+    step: (t) => ({ kind: 'update-branch', ticket: t.id, rule: 'behind-main' }),
   },
   {
     // Reviewed, green, and the qa-reporter posted its evidence for this commit: merge it.

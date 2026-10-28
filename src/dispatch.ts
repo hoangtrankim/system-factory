@@ -35,7 +35,7 @@ export interface DispatchReport {
   markedDone: number[];
   stuck: string[];
   needsHuman: number[];
-  stoppedBy: 'idle' | 'max-runs' | 'dry-run';
+  stoppedBy: 'idle' | 'max-runs' | 'dry-run' | 'auth';
 }
 
 export interface DispatcherDeps {
@@ -49,6 +49,8 @@ export interface DispatcherDeps {
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
 }
+
+const AUTH_FAILURE = /failed to authenticate|not logged in|invalid api key|please run \/login|oauth/i;
 
 const fingerprint = (t: Ticket | undefined) =>
   t ? JSON.stringify([t.state, t.round, t.testsReady, t.gates, t.pr, t.reviewedSha, t.risky, t.blockedBy, t.closed]) : '';
@@ -73,6 +75,7 @@ export class Dispatcher {
         merged: pr.merged,
         checksDone: checks.length > 0 && checks.every((c) => c.status === 'completed'),
         checksGreen: checks.length > 0 && checks.every((c) => c.status === 'completed' && PASSED_CONCLUSIONS.includes(c.conclusion ?? '')),
+        behind: !!pr.behind,
       });
       const notes = (await this.d.tracker.comments(t.id)).filter((c) => c.body.startsWith('**qa-reporter**'));
       reported.set(t.id, new Set(notes.some((c) => c.body.includes(pr.headSha)) ? [pr.headSha] : []));
@@ -135,6 +138,25 @@ export class Dispatcher {
         this.out(`#${step.ticket} back to review (PR #${t.pr} changed after its review)`);
         continue;
       }
+      if (step.kind === 'update-branch') {
+        const t = byId.get(step.ticket)!;
+        const head = snap.prs.get(step.ticket)!.headSha;
+        try {
+          await this.d.codeHost.updateBranch(t.pr!, head);
+          await this.d.factory.move(step.ticket, {
+            to: 'in-review',
+            role: 'system',
+            note: `PR #${t.pr} was behind main, so the factory merged main into it. The new head needs a new review.`,
+          });
+          this.out(`#${step.ticket} updated with main (PR #${t.pr}), back to review`);
+        } catch (e) {
+          // Usually a conflict with main: a human decides.
+          const why = e instanceof Error ? e.message : String(e);
+          await this.d.factory.move(step.ticket, { to: 'needs-human', role: 'system', reason: `could not bring main into PR #${t.pr}: ${why}` });
+          this.out(`#${step.ticket} could not be updated with main: ${why}`);
+        }
+        continue;
+      }
       if (!opts.watch && report.runs.length >= maxRuns) {
         report.stoppedBy = 'max-runs';
         return report;
@@ -142,6 +164,12 @@ export class Dispatcher {
 
       const record = await this.runAgent(step, snap);
       report.runs.push(record);
+      // Claude Code is logged out: every later run would fail the same way, so stop and say so.
+      if (!record.result.ok && AUTH_FAILURE.test(record.result.summary)) {
+        this.out(`  stopping: claude is not logged in on this machine. Run \`claude auth login\`, then start the dispatcher again.`);
+        report.stoppedBy = 'auth';
+        return report;
+      }
       if (!record.changed) {
         const key = `${step.agent}:${step.ticket}`;
         const after = (await this.d.tracker.list({ includeClosed: true })).find((t) => t.id === step.ticket);

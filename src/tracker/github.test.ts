@@ -134,3 +134,16 @@ describe('GitHubCodeHost.merge', () => {
     expect(calls).toEqual([{ method: 'PUT', path: 'repos/o/r/pulls/7/merge', body: { sha: 'abc', merge_method: 'squash' } }]);
   });
 });
+
+describe('GitHubCodeHost.updateBranch', () => {
+  it('merges main into the PR over REST, pinned to the head commit, and reads behind', async () => {
+    const { gh, calls } = fakeGh({
+      'PUT repos/o/r/pulls/7/update-branch': () => ({ message: 'Updating pull request branch.' }),
+      'GET repos/o/r/pulls/7': () => ({ number: 7, html_url: 'u', head: { ref: 'b', sha: 'abc' }, state: 'open', merged_at: null, mergeable_state: 'behind' }),
+    });
+    const host = new GitHubCodeHost('o/r', gh);
+    await host.updateBranch(7, 'abc');
+    expect(calls[0]).toEqual({ method: 'PUT', path: 'repos/o/r/pulls/7/update-branch', body: { expected_head_sha: 'abc' } });
+    expect((await host.getPr(7)).behind).toBe(true);
+  });
+});

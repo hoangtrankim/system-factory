@@ -82,6 +82,13 @@ describe('route', () => {
     expect(route(snap([spec(), legacy], { prs }))).toMatchObject({ kind: 're-review' });
   });
 
+  it('brings main into a reviewed PR that is behind, before QA or merge', () => {
+    const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
+    const prs = new Map([[10, { headSha: 'abc', merged: false, checksDone: true, checksGreen: true, behind: true }]]);
+    expect(route(snap([spec(), t], { prs }))).toEqual({ kind: 'update-branch', ticket: 10, rule: 'behind-main' });
+    expect(route(snap([spec(), t], { prs, reported: new Map([[10, new Set(['abc'])]]) }))).toMatchObject({ kind: 'update-branch' });
+  });
+
   it('closes a spec whose tickets are all done, and skips what it was told to', () => {
     const tickets = [spec(), ticket({ state: 'done', closed: true })];
     expect(route(snap(tickets))).toMatchObject({ agent: 'planner', rule: 'close-spec' });
@@ -123,6 +130,13 @@ class FakeHost implements CodeHost {
     if (this.refuse) throw new Error(this.refuse);
     this.merges.push([n, sha, method]);
     this.prs.set(n, { ...(await this.getPr(n)), state: 'closed', merged: true });
+  }
+  updates: Array<[number, string]> = [];
+  conflict?: string;
+  async updateBranch(n: number, sha: string) {
+    if (this.conflict) throw new Error(this.conflict);
+    this.updates.push([n, sha]);
+    this.prs.set(n, { ...(await this.getPr(n)), headSha: 'f'.repeat(40), behind: false });
   }
 }
 
@@ -220,6 +234,49 @@ describe('Dispatcher', () => {
     expect(host.merges).toEqual([[5, pushed, 'merge']]);
     expect(host.statuses.map((s) => s[0])).toEqual([SHA, pushed]);
     void tracker;
+  });
+
+  it('brings main into a PR that is behind, reviews the new head, then merges it', async () => {
+    const { d, runner, host, tracker, lines } = await setup(async (f, h, agent, n) => {
+      if (agent === 'factory-reviewer') {
+        const head = (await h.getPr(5)).headSha;
+        await f.move(n, { to: 'in-qa', role: 'reviewer', sha: head });
+        // Main moves on while the first review runs.
+        if (head === SHA) h.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: SHA, state: 'open', merged: false, behind: true });
+      } else if (agent === 'factory-qa-reporter') await f.note(n, 'qa-reporter', `PASS at ${(await h.getPr(5)).headSha}`);
+      else await happyPath(f, h, agent, n);
+    });
+    const r = await d.run();
+    expect(host.updates).toEqual([[5, SHA]]);
+    expect(runner.calls.map((c) => c.agent).slice(-4)).toEqual(['factory-reviewer', 'factory-reviewer', 'factory-qa-reporter', 'factory-planner']);
+    expect(host.merges).toEqual([[5, 'f'.repeat(40), 'merge']]);
+    expect(r.merged).toEqual([2]);
+    expect((await tracker.get(2)).round).toBe(0);
+    expect(lines.join('\n')).toContain('#2 updated with main (PR #5), back to review');
+  });
+
+  it('hands a PR that cannot take main to a human', async () => {
+    const { d, host, tracker } = await setup(async (f, h, agent, n) => {
+      await happyPath(f, h, agent, n);
+      if (agent === 'factory-reviewer') h.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: SHA, state: 'open', merged: false, behind: true });
+    });
+    host.conflict = 'HTTP 422: merge conflict';
+    const r = await d.run();
+    expect(r).toMatchObject({ merged: [], needsHuman: [2] });
+    expect(tracker.posted.get(2)?.at(-1)).toContain('could not bring main into PR #5: HTTP 422: merge conflict');
+  });
+
+  it('stops when claude is not logged in, instead of skipping the ticket', async () => {
+    const { tracker, factory, host } = await setup(happyPath);
+    const runner: AgentRunner = {
+      run: async () => ({ ok: false, exitCode: 1, durationMs: 1, summary: 'Failed to authenticate: OAuth session expired and could not be refreshed' }),
+    };
+    const lines: string[] = [];
+    const d = new Dispatcher({ tracker, factory, codeHost: host, runner, cwd: '.', out: (s) => lines.push(s) });
+    const r = await d.run({ watch: true });
+    expect(r).toMatchObject({ stoppedBy: 'auth', stuck: [] });
+    expect(r.runs).toHaveLength(1);
+    expect(lines.join('\n')).toContain('claude auth login');
   });
 
   it('gives up on an agent that changes nothing, until the ticket changes', async () => {
