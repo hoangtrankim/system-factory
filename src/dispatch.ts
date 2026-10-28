@@ -50,7 +50,7 @@ export interface DispatcherDeps {
 }
 
 const fingerprint = (t: Ticket | undefined) =>
-  t ? JSON.stringify([t.state, t.round, t.testsReady, t.gates, t.pr, t.risky, t.blockedBy, t.closed]) : '';
+  t ? JSON.stringify([t.state, t.round, t.testsReady, t.gates, t.pr, t.reviewedSha, t.risky, t.blockedBy, t.closed]) : '';
 
 export class Dispatcher {
   constructor(private readonly d: DispatcherDeps) {}
@@ -106,6 +106,17 @@ export class Dispatcher {
         await this.d.factory.move(step.ticket, { to: 'done', role: 'system', note: `PR #${t.pr} is merged.` });
         report.markedDone.push(step.ticket);
         this.out(`#${step.ticket} done (PR #${t.pr} merged)`);
+        continue;
+      }
+      if (step.kind === 're-review') {
+        const t = byId.get(step.ticket)!;
+        const head = snap.prs.get(step.ticket)?.headSha;
+        await this.d.factory.move(step.ticket, {
+          to: 'in-review',
+          role: 'system',
+          note: `PR #${t.pr} moved from the reviewed commit ${t.reviewedSha ?? '(none)'} to ${head}, so it needs a new review.`,
+        });
+        this.out(`#${step.ticket} back to review (PR #${t.pr} changed after its review)`);
         continue;
       }
       if (!opts.watch && report.runs.length >= maxRuns) {

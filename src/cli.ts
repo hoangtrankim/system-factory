@@ -33,7 +33,8 @@ Commands
   diff <id>                               The diff of the ticket's PR
   checks <id>                             CI checks of the PR's head commit, and whether it is merged;
                                           exit 3 if any failed, 4 if pending or none yet
-  move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
+  move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N] [--sha SHA]
+                                          a reviewer's pass to in-qa needs --sha, the commit reviewed
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
   note <id> --as R (--note N | --note-file F)   Comment on a ticket
@@ -308,6 +309,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
           reason: flag(a, 'reason'),
           note: note(a, deps.cwd),
           pr: pr ? id(pr, '--pr') : undefined,
+          sha: flag(a, 'sha'),
         }),
       );
       return 0;
@@ -376,7 +378,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         else {
           if (dryRun) {
             const n = r.next;
-            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
+            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
           } else {
             out(`\n${r.runs.length} agent run(s); stopped: ${r.stoppedBy}`);
             if (r.markedDone.length) out(`Done: ${r.markedDone.map((n) => `#${n}`).join(', ')}`);

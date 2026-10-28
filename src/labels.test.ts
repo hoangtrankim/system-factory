@@ -66,6 +66,15 @@ describe('body lines', () => {
     expect(fromBody(body)).toEqual({ spec: 3, pr: 9, blockedBy: [1, 2], covers: ['AC-1', 'AC-4'] });
   });
 
+  it('keeps the reviewed commit as a Reviewed line, and only a full SHA', () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const out = withBodyFields('Text', { covers: [], blockedBy: [], reviewedSha: sha });
+    expect(out).toContain(`Reviewed: ${sha}`);
+    expect(fromBody(out).reviewedSha).toBe(sha);
+    expect(withBodyFields(out, { covers: [], blockedBy: [] })).not.toContain('Reviewed:');
+    expect(fromBody('Reviewed: abc').reviewedSha).toBeUndefined();
+  });
+
   it('adds, rewrites and removes link lines without touching the rest', () => {
     const body = 'Intro\n\nBlocked by: #1\nOutro';
     const out = withBodyFields(body, { spec: 3, covers: ['AC-2'], blockedBy: [], pr: 5 });

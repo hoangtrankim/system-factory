@@ -11,6 +11,8 @@ import { route, waitingOnOwner, type Snapshot } from './router.js';
 import { parseResult, type AgentRunner, type RunRequest } from './runner.js';
 import { MemoryTracker } from './tracker/memory.js';
 
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+
 function ticket(over: Partial<Ticket> = {}): Ticket {
   return {
     id: 10, title: 't', body: '', type: 'build', state: 'planned', priority: 2, round: 0, risky: false,
@@ -53,7 +55,7 @@ describe('route', () => {
   });
 
   it('reports QA once per head SHA, then marks a merged PR done', () => {
-    const t = ticket({ state: 'in-qa', pr: 5 });
+    const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
     const prs = new Map([[10, { headSha: 'abc', merged: false, checksDone: true }]]);
     expect(route(snap([spec(), t], { prs }))).toMatchObject({ agent: 'qa-reporter' });
     expect(route(snap([spec(), t], { prs: new Map([[10, { headSha: 'abc', merged: false, checksDone: false }]]) }))).toBeUndefined();
@@ -62,6 +64,16 @@ describe('route', () => {
     expect(waitingOnOwner(snap([spec(), t], { prs, reported })).toMerge).toEqual([10]);
     const merged = new Map([[10, { headSha: 'abc', merged: true, checksDone: false }]]);
     expect(route(snap([spec(), t], { prs: merged }))).toEqual({ kind: 'mark-done', ticket: 10, rule: 'merged-pr' });
+  });
+
+  it('sends a PR that changed after its review back to review, before QA or merge', () => {
+    const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
+    const prs = new Map([[10, { headSha: 'def', merged: false, checksDone: true }]]);
+    const reported = new Map([[10, new Set(['def'])]]);
+    expect(route(snap([spec(), t], { prs, reported }))).toEqual({ kind: 're-review', ticket: 10, rule: 'pushed-after-review' });
+    expect(waitingOnOwner(snap([spec(), t], { prs, reported })).toMerge).toEqual([]);
+    const legacy = ticket({ state: 'in-qa', pr: 5 });
+    expect(route(snap([spec(), legacy], { prs }))).toMatchObject({ kind: 're-review' });
   });
 
   it('closes a spec whose tickets are all done, and skips what it was told to', () => {
@@ -87,13 +99,17 @@ class FakeHost implements CodeHost {
     throw new Error('unused');
   }
   async getPr(n: number) {
-    return this.prs.get(n) ?? { number: n, url: 'u', head: 'h', headSha: 'sha1', state: 'open' as const, merged: false };
+    return this.prs.get(n) ?? { number: n, url: 'u', head: 'h', headSha: SHA, state: 'open' as const, merged: false };
   }
   async diff() {
     return '';
   }
   async checks() {
     return this.checkRuns;
+  }
+  statuses: Array<[string, string, string]> = [];
+  async setStatus(sha: string, context: string, state: string) {
+    this.statuses.push([sha, context, state]);
   }
 }
 
@@ -129,8 +145,8 @@ describe('Dispatcher', () => {
       await f.move(n, { to: 'building', role: 'builder' });
       await f.move(n, { to: 'in-review', role: 'builder', pr: 5 });
     }
-    if (agent === 'factory-reviewer') await f.move(n, { to: 'in-qa', role: 'reviewer' });
-    if (agent === 'factory-qa-reporter') await f.note(n, 'qa-reporter', 'PASS at sha1');
+    if (agent === 'factory-reviewer') await f.move(n, { to: 'in-qa', role: 'reviewer', sha: SHA });
+    if (agent === 'factory-qa-reporter') await f.note(n, 'qa-reporter', `PASS at ${SHA}`);
     if (agent === 'factory-planner') await f.closeSpec(1, 'planner');
     void host;
   };
@@ -142,7 +158,7 @@ describe('Dispatcher', () => {
     expect(first).toMatchObject({ toMerge: [2], stoppedBy: 'idle' });
     expect(runner.calls[0]!.prompt).toBe('Ticket 2 (spec 1). Follow your prompt.');
 
-    host.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: 'sha1', state: 'closed', merged: true });
+    host.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: SHA, state: 'closed', merged: true });
     const second = await d.run();
     expect(second.markedDone).toEqual([2]);
     expect(runner.calls.at(-1)!.agent).toBe('factory-planner');
@@ -151,6 +167,24 @@ describe('Dispatcher', () => {
     const runs = readFileSync(join(dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(runs).toHaveLength(6);
     expect(runs[0]).toMatchObject({ ticket: 2, agent: 'designer', rule: 'design', ok: true, changed: true });
+  });
+
+  it('reviews again when the builder pushes after the review', async () => {
+    const pushed = 'e'.repeat(40);
+    const { d, runner, host, tracker } = await setup(async (f, h, agent, n) => {
+      if (agent === 'factory-reviewer') {
+        const head = (await h.getPr(5)).headSha;
+        await f.move(n, { to: 'in-qa', role: 'reviewer', sha: head });
+        // The first time, a push lands right after the review.
+        if (head === SHA) h.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: pushed, state: 'open', merged: false });
+      } else if (agent === 'factory-qa-reporter') await f.note(n, 'qa-reporter', `PASS at ${(await h.getPr(5)).headSha}`);
+      else await happyPath(f, h, agent, n);
+    });
+    const r = await d.run();
+    expect(runner.calls.map((c) => c.agent).slice(-3)).toEqual(['factory-reviewer', 'factory-reviewer', 'factory-qa-reporter']);
+    expect(r.toMerge).toEqual([2]);
+    expect((await tracker.get(2)).reviewedSha).toBe(pushed);
+    expect(host.statuses.map((s) => s[0])).toEqual([SHA, pushed]);
   });
 
   it('gives up on an agent that changes nothing, until the ticket changes', async () => {

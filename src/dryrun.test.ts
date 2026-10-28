@@ -38,6 +38,7 @@ class FakeHost implements CodeHost {
   async checks() {
     return this.checkRuns;
   }
+  async setStatus() {}
 }
 
 describe('flawed-test send-back', () => {

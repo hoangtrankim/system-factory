@@ -79,6 +79,7 @@ export function issueToTicket(issue: GhIssue): Ticket | undefined {
     covers: b.covers,
     spec: b.spec,
     pr: b.pr,
+    reviewedSha: b.reviewedSha,
     closed: issue.state === 'closed',
   };
 }

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { Factory, RuleError, type FactoryEvent } from './factory.js';
 import { MemoryTracker } from './tracker/memory.js';
 
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+
 let tracker: MemoryTracker;
 let events: FactoryEvent[];
 let factory: Factory;
@@ -27,7 +29,7 @@ describe('Factory', () => {
     await factory.markTestsReady(t.id, 'qa-writer');
     await factory.move(t.id, { to: 'building', role: 'builder' });
     await factory.move(t.id, { to: 'in-review', role: 'builder', pr: 42 });
-    await factory.move(t.id, { to: 'in-qa', role: 'reviewer' });
+    await factory.move(t.id, { to: 'in-qa', role: 'reviewer', sha: SHA });
     const done = await factory.move(t.id, { to: 'done', role: 'system' });
 
     expect(done).toMatchObject({ state: 'done', closed: true, pr: 42 });
@@ -86,6 +88,27 @@ describe('Factory', () => {
     expect(events.at(-1)).toMatchObject({ escalated: true, to: 'needs-human', reason: 'missing-test' });
   });
 
+  it('passes a review only for the PR head, and marks that commit reviewed', async () => {
+    const statuses: string[][] = [];
+    let head = 'f'.repeat(40);
+    const host = {
+      getPr: async (n: number) => ({ number: n, url: 'u', head: 'ticket-2', headSha: head, state: 'open' as const, merged: false }),
+      setStatus: async (sha: string, context: string, state: string) => void statuses.push([sha, context, state]),
+    };
+    factory = new Factory(tracker, { codeHost: host as never });
+    const { t } = await specWithTicket();
+    await factory.move(t.id, { to: 'designed', role: 'designer' });
+    await factory.markTestsReady(t.id, 'qa-writer');
+    await factory.move(t.id, { to: 'building', role: 'builder' });
+    await factory.move(t.id, { to: 'in-review', role: 'builder', pr: 7 });
+
+    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer', sha: SHA })).rejects.toThrow(/review the new head/);
+    expect(statuses).toEqual([]);
+    head = SHA;
+    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer', sha: SHA })).resolves.toMatchObject({ reviewedSha: SHA });
+    expect(statuses).toEqual([[SHA, 'factory/review', 'success']]);
+  });
+
   it('runs the security gate on risky tickets', async () => {
     const { t } = await specWithTicket(true);
     await factory.move(t.id, { to: 'designed', role: 'designer' });
@@ -93,14 +116,14 @@ describe('Factory', () => {
     await factory.move(t.id, { to: 'building', role: 'builder' });
     await factory.move(t.id, { to: 'in-review', role: 'builder', pr: 1 });
 
-    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer' })).rejects.toThrow(/security gate/);
+    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer', sha: SHA })).rejects.toThrow(/security gate/);
 
     const failed = await factory.recordGate(t.id, 'security', 'fail', 'security', 'unmarked-risk');
     expect(failed).toMatchObject({ state: 'building', round: 1 });
 
     await factory.move(t.id, { to: 'in-review', role: 'builder' });
     await factory.recordGate(t.id, 'security', 'pass', 'security');
-    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer' })).resolves.toMatchObject({ state: 'in-qa' });
+    await expect(factory.move(t.id, { to: 'in-qa', role: 'reviewer', sha: SHA })).resolves.toMatchObject({ state: 'in-qa' });
   });
 
   it('lists what a builder can start next', async () => {

@@ -69,6 +69,8 @@ export interface Ticket {
   covers: string[];
   spec?: number;
   pr?: number;
+  // The PR commit the reviewer passed. Only that commit may merge.
+  reviewedSha?: string;
   closed: boolean;
 }
 
@@ -100,6 +102,8 @@ export const RULES: readonly Rule[] = [
   { from: 'building', to: 'in-review', roles: ['builder'], kind: 'forward' },
   { from: 'in-review', to: 'in-qa', roles: ['reviewer'], kind: 'forward' },
   { from: 'in-qa', to: 'done', roles: ['system'], kind: 'forward' },
+  // The PR got new commits after the review passed, so it needs a new review. Not a round.
+  { from: 'in-qa', to: 'in-review', roles: ['system'], kind: 'side' },
   { from: 'in-review', to: 'building', roles: ['reviewer', 'security'], kind: 'send-back' },
   { from: 'in-qa', to: 'building', roles: ['qa-reporter', 'system'], kind: 'send-back' },
   // An acceptance test that does not test what its criterion says goes back to the qa-writer.
@@ -121,6 +125,8 @@ export interface MoveRequest {
   role: Role;
   reason?: string;
   pr?: number;
+  // The PR head commit the reviewer read; required to pass a review.
+  sha?: string;
 }
 
 // Facts about other tickets that a rule needs; the caller looks them up in the tracker.
@@ -170,6 +176,9 @@ export function canMove(ticket: Ticket, req: MoveRequest, ctx: MoveContext = { o
   if (req.to === 'in-qa' && ticket.risky && ticket.gates.security !== 'pass') {
     return refuse(`#${ticket.id} is risky and has not passed the security gate`);
   }
+  if (req.to === 'in-qa' && !/^[0-9a-f]{40}$/.test(req.sha ?? '')) {
+    return refuse(`passing a review needs --sha <the full commit you reviewed>`);
+  }
   if (req.to === 'done' && !ticket.pr) return refuse(`#${ticket.id} has no PR`);
 
   return ok;
@@ -201,6 +210,8 @@ export interface Applied {
 export function applyMove(ticket: Ticket, req: MoveRequest, maxRounds = DEFAULT_MAX_ROUNDS): Applied {
   const next: Ticket = { ...ticket, gates: { ...ticket.gates } };
   if (req.pr) next.pr = req.pr;
+  // A review covers one commit: passing records it, any other move forgets it.
+  next.reviewedSha = req.to === 'in-qa' ? req.sha : undefined;
 
   if (isSendBack(ticket.state, req.to, req.role)) {
     next.round = ticket.round + 1;

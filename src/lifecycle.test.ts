@@ -13,6 +13,8 @@ import {
   type Ticket,
 } from './lifecycle.js';
 
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+
 function ticket(over: Partial<Ticket> = {}): Ticket {
   return {
     id: 10,
@@ -41,7 +43,7 @@ describe('canMove', () => {
       { to: 'designed', role: 'designer' },
       { to: 'building', role: 'builder' },
       { to: 'in-review', role: 'builder', pr: 7 },
-      { to: 'in-qa', role: 'reviewer' },
+      { to: 'in-qa', role: 'reviewer', sha: SHA },
       { to: 'done', role: 'system' },
     ] as const;
     for (const s of steps) {
@@ -95,8 +97,8 @@ describe('canMove', () => {
 
   it('holds a risky ticket in review until the security gate passes', () => {
     const t = ticket({ state: 'in-review', risky: true, pr: 3 });
-    expect(canMove(t, { to: 'in-qa', role: 'reviewer' }).ok).toBe(false);
-    expect(canMove({ ...t, gates: { security: 'pass' } }, { to: 'in-qa', role: 'reviewer' }).ok).toBe(true);
+    expect(canMove(t, { to: 'in-qa', role: 'reviewer', sha: SHA }).ok).toBe(false);
+    expect(canMove({ ...t, gates: { security: 'pass' } }, { to: 'in-qa', role: 'reviewer', sha: SHA }).ok).toBe(true);
   });
 
   it('needs a typed reason for a send-back', () => {
@@ -105,6 +107,23 @@ describe('canMove', () => {
     expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'looks off' }).ok).toBe(false);
     expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'missing-test' }).ok).toBe(true);
     expect(canMove(t, { to: 'building', role: 'reviewer', reason: 'quality' }).ok).toBe(true);
+  });
+
+  it('passes a review only for a full commit SHA, and forgets it on any later move', () => {
+    const t = ticket({ state: 'in-review', pr: 3 });
+    expect(canMove(t, { to: 'in-qa', role: 'reviewer' }).ok).toBe(false);
+    expect(canMove(t, { to: 'in-qa', role: 'reviewer', sha: 'abc123' }).ok).toBe(false);
+    const passed = applyMove(t, { to: 'in-qa', role: 'reviewer', sha: SHA }).ticket;
+    expect(passed.reviewedSha).toBe(SHA);
+    const back = applyMove(passed, { to: 'in-review', role: 'system' }).ticket;
+    expect(back).toMatchObject({ state: 'in-review', round: 0, reviewedSha: undefined });
+    expect(applyMove(passed, { to: 'building', role: 'qa-reporter', reason: 'wrong-behavior' }).ticket.reviewedSha).toBeUndefined();
+  });
+
+  it('lets only the system send a changed PR back to review', () => {
+    const t = ticket({ state: 'in-qa', pr: 3, reviewedSha: SHA });
+    expect(canMove(t, { to: 'in-review', role: 'system' }).ok).toBe(true);
+    expect(canMove(t, { to: 'in-review', role: 'builder' }).ok).toBe(false);
   });
 
   it('needs a reason to block or escalate', () => {

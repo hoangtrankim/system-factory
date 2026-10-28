@@ -86,10 +86,10 @@ Tests: <passed>/<total>, whole suite (`CI=1 npm test`)
      forge move N designed --as reviewer --reason flawed-test --note-file /tmp/factory/reviewer-N.md
      ```
 
-   - Only minor findings, or none: pass it. (The CLI refuses this for a risky ticket whose security gate has not passed.) Refer to the security note's follow-ups instead of repeating them; give `file:line` from the PR head. The planner files the Follow-ups as tickets before the spec closes.
+   - Only minor findings, or none: pass it with `--sha`, the full SHA you reviewed. (The CLI refuses this for a risky ticket whose security gate has not passed, and when the PR has moved past `<sha>`: then fetch again and review the new commits.) Refer to the security note's follow-ups instead of repeating them; give `file:line` from the PR head. The planner files the Follow-ups as tickets before the spec closes.
 
      ```sh
-     forge move N in-qa --as reviewer --note-file /tmp/factory/reviewer-N.md
+     forge move N in-qa --as reviewer --sha <sha> --note-file /tmp/factory/reviewer-N.md
      ```
 
 Be specific and fair: a finding names the exact problem and the fix. Send back only for the checks above, including the quality rules as written; everything else, including taste, is a Follow-up.
