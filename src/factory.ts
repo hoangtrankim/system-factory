@@ -10,6 +10,7 @@ import {
   canOpenPr,
   canUploadEvidence,
   canMarkTestsReady,
+  canMerge,
   canMove,
   canRecordGate,
   pickReady,
@@ -25,14 +26,14 @@ import {
   type Ticket,
   type TicketType,
 } from './lifecycle.js';
-import type { CodeHost, PullRequest } from './codehost.js';
+import type { CodeHost, MergeMethod, PullRequest } from './codehost.js';
 import type { Comment, Tracker } from './tracker/tracker.js';
 
 export class RuleError extends Error {}
 
 export interface FactoryEvent {
   at: string;
-  kind: 'create' | 'edit' | 'move' | 'mark' | 'gate' | 'close-spec' | 'note' | 'evidence' | 'pr';
+  kind: 'create' | 'edit' | 'move' | 'mark' | 'gate' | 'close-spec' | 'note' | 'evidence' | 'pr' | 'merge';
   file?: string;
   ticket: number;
   role: Role;
@@ -51,6 +52,7 @@ export interface FactoryOptions {
   now?: () => Date;
   codeHost?: CodeHost;
   baseBranch?: string;
+  mergeMethod?: MergeMethod;
 }
 
 export interface CreateInput {
@@ -256,6 +258,28 @@ export class Factory {
     await this.tracker.comment(id, `**${role}** opened PR #${pr.number}.`);
     this.emit({ kind: 'pr', ticket: id, role });
     return pr;
+  }
+
+  // Merges the reviewed commit once CI is green, then marks the ticket done. A risky ticket
+  // merges too, with a note asking the owner to look at it afterwards.
+  async merge(id: number, role: Role): Promise<Ticket> {
+    const host = this.host();
+    const ticket = await this.tracker.get(id);
+    if (!ticket.pr) throw new RuleError(`#${id} has no PR`);
+    const pr = await host.getPr(ticket.pr);
+    const checks = pr.merged ? [] : await host.checks(pr.number);
+    check(canMerge(ticket, role, { headSha: pr.headSha, open: pr.state === 'open' && !pr.merged, checks }));
+    const method = this.opts.mergeMethod ?? 'merge';
+    try {
+      await host.merge(pr.number, pr.headSha, method);
+    } catch (e) {
+      throw new RuleError(`GitHub refused to merge PR #${pr.number}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    this.emit({ kind: 'merge', ticket: id, role });
+    const who = role === 'owner' ? 'the owner' : 'the factory';
+    let note = `PR #${pr.number} merged by ${who} (${method}) at the reviewed commit ${pr.headSha}, with every check green.`;
+    if (ticket.risky) note += `\n\nThis ticket is marked risky. It merged automatically; the owner should look at it afterwards.`;
+    return this.move(id, { to: 'done', role: 'system', note });
   }
 
   async prOf(id: number): Promise<number> {

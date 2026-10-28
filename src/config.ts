@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { MERGE_METHODS, type MergeMethod } from './codehost.js';
 import { DEFAULT_MAX_ROUNDS } from './lifecycle.js';
 
 export interface Config {
@@ -15,6 +16,8 @@ export interface Config {
   components: Record<string, string[]>;
   // Extra flags for each `claude -p` agent run (default: see DEFAULT_CLAUDE_ARGS in runner.ts).
   claudeArgs?: string[];
+  // How the factory merges a green, reviewed PR (default: merge).
+  mergeMethod: MergeMethod;
 }
 
 export const CONFIG_FILE = 'factory.config.yml';
@@ -37,12 +40,17 @@ export function loadConfig(dir = process.cwd()): Config {
       components[name] = list;
     }
   }
+  const mergeMethod = raw.mergeMethod ?? 'merge';
+  if (!MERGE_METHODS.includes(mergeMethod as MergeMethod)) {
+    throw new Error(`${CONFIG_FILE}: mergeMethod must be one of ${MERGE_METHODS.join(', ')}`);
+  }
   return {
     repo: typeof raw.repo === 'string' ? raw.repo : undefined,
     maxRounds,
     base: typeof raw.base === 'string' ? raw.base : 'main',
     components,
     claudeArgs: Array.isArray(raw.claudeArgs) ? raw.claudeArgs.map(String) : undefined,
+    mergeMethod: mergeMethod as MergeMethod,
   };
 }
 

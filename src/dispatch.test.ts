@@ -54,24 +54,30 @@ describe('route', () => {
     expect(route(snap(blocked))).toBeUndefined();
   });
 
-  it('reports QA once per head SHA, then marks a merged PR done', () => {
+  it('reports QA once per head SHA, merges it when green, and marks a merged PR done', () => {
     const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
-    const prs = new Map([[10, { headSha: 'abc', merged: false, checksDone: true }]]);
+    const prs = new Map([[10, { headSha: 'abc', merged: false, checksDone: true, checksGreen: true }]]);
     expect(route(snap([spec(), t], { prs }))).toMatchObject({ agent: 'qa-reporter' });
-    expect(route(snap([spec(), t], { prs: new Map([[10, { headSha: 'abc', merged: false, checksDone: false }]]) }))).toBeUndefined();
+    expect(route(snap([spec(), t], { prs: new Map([[10, { headSha: 'abc', merged: false, checksDone: false, checksGreen: false }]]) }))).toBeUndefined();
+    const reported = new Map([[10, new Set(['abc'])]]);
+    expect(route(snap([spec(), t], { prs, reported }))).toEqual({ kind: 'merge', ticket: 10, rule: 'merge-green' });
+    const merged = new Map([[10, { headSha: 'abc', merged: true, checksDone: false, checksGreen: false }]]);
+    expect(route(snap([spec(), t], { prs: merged }))).toEqual({ kind: 'mark-done', ticket: 10, rule: 'merged-pr' });
+  });
+
+  it('never merges a red PR, and shows it to the owner', () => {
+    const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
+    const prs = new Map([[10, { headSha: 'abc', merged: false, checksDone: true, checksGreen: false }]]);
     const reported = new Map([[10, new Set(['abc'])]]);
     expect(route(snap([spec(), t], { prs, reported }))).toBeUndefined();
-    expect(waitingOnOwner(snap([spec(), t], { prs, reported })).toMerge).toEqual([10]);
-    const merged = new Map([[10, { headSha: 'abc', merged: true, checksDone: false }]]);
-    expect(route(snap([spec(), t], { prs: merged }))).toEqual({ kind: 'mark-done', ticket: 10, rule: 'merged-pr' });
+    expect(waitingOnOwner(snap([spec(), t], { prs, reported })).needsHuman).toEqual([10]);
   });
 
   it('sends a PR that changed after its review back to review, before QA or merge', () => {
     const t = ticket({ state: 'in-qa', pr: 5, reviewedSha: 'abc' });
-    const prs = new Map([[10, { headSha: 'def', merged: false, checksDone: true }]]);
+    const prs = new Map([[10, { headSha: 'def', merged: false, checksDone: true, checksGreen: true }]]);
     const reported = new Map([[10, new Set(['def'])]]);
     expect(route(snap([spec(), t], { prs, reported }))).toEqual({ kind: 're-review', ticket: 10, rule: 'pushed-after-review' });
-    expect(waitingOnOwner(snap([spec(), t], { prs, reported })).toMerge).toEqual([]);
     const legacy = ticket({ state: 'in-qa', pr: 5 });
     expect(route(snap([spec(), legacy], { prs }))).toMatchObject({ kind: 're-review' });
   });
@@ -110,6 +116,13 @@ class FakeHost implements CodeHost {
   statuses: Array<[string, string, string]> = [];
   async setStatus(sha: string, context: string, state: string) {
     this.statuses.push([sha, context, state]);
+  }
+  merges: Array<[number, string, string]> = [];
+  refuse?: string;
+  async merge(n: number, sha: string, method: string) {
+    if (this.refuse) throw new Error(this.refuse);
+    this.merges.push([n, sha, method]);
+    this.prs.set(n, { ...(await this.getPr(n)), state: 'closed', merged: true });
   }
 }
 
@@ -151,22 +164,43 @@ describe('Dispatcher', () => {
     void host;
   };
 
-  it('runs a ticket to the merge, waits for the owner, then finishes the spec', async () => {
+  it('runs a ticket through review and QA, merges it, then finishes the spec', async () => {
     const { d, runner, host, tracker, dir } = await setup(happyPath);
-    const first = await d.run();
-    expect(runner.calls.map((c) => c.agent)).toEqual(['factory-designer', 'factory-qa-writer', 'factory-builder', 'factory-reviewer', 'factory-qa-reporter']);
-    expect(first).toMatchObject({ toMerge: [2], stoppedBy: 'idle' });
+    const r = await d.run();
+    expect(runner.calls.map((c) => c.agent)).toEqual([
+      'factory-designer', 'factory-qa-writer', 'factory-builder', 'factory-reviewer', 'factory-qa-reporter', 'factory-planner',
+    ]);
+    expect(r).toMatchObject({ merged: [2], stoppedBy: 'idle' });
     expect(runner.calls[0]!.prompt).toBe('Ticket 2 (spec 1). Follow your prompt.');
-
-    host.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: SHA, state: 'closed', merged: true });
-    const second = await d.run();
-    expect(second.markedDone).toEqual([2]);
-    expect(runner.calls.at(-1)!.agent).toBe('factory-planner');
+    expect(host.merges).toEqual([[5, SHA, 'merge']]);
+    expect(await tracker.get(2)).toMatchObject({ state: 'done', closed: true });
     expect((await tracker.get(1)).closed).toBe(true);
 
     const runs = readFileSync(join(dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(runs).toHaveLength(6);
     expect(runs[0]).toMatchObject({ ticket: 2, agent: 'designer', rule: 'design', ok: true, changed: true });
+  });
+
+  it('marks a PR the owner merged by hand done', async () => {
+    const { d, host, tracker } = await setup(async (f, h, agent, n) => {
+      if (agent === 'factory-qa-reporter') {
+        h.prs.set(5, { number: 5, url: 'u', head: 'ticket-2', headSha: SHA, state: 'closed', merged: true });
+      } else await happyPath(f, h, agent, n);
+    });
+    const r = await d.run();
+    expect(r).toMatchObject({ merged: [], markedDone: [2] });
+    expect(host.merges).toEqual([]);
+    expect((await tracker.get(2)).state).toBe('done');
+  });
+
+  it('hands a PR GitHub refuses to merge to a human', async () => {
+    const { d, host, tracker, lines } = await setup(happyPath);
+    host.refuse = 'HTTP 405: Head branch is out of date';
+    const r = await d.run();
+    expect(r).toMatchObject({ merged: [], needsHuman: [2] });
+    expect((await tracker.get(2)).state).toBe('needs-human');
+    expect(tracker.posted.get(2)?.at(-1)).toContain('could not merge: GitHub refused to merge PR #5: HTTP 405');
+    expect(lines.join('\n')).toContain('#2 could not merge');
   });
 
   it('reviews again when the builder pushes after the review', async () => {
@@ -181,10 +215,11 @@ describe('Dispatcher', () => {
       else await happyPath(f, h, agent, n);
     });
     const r = await d.run();
-    expect(runner.calls.map((c) => c.agent).slice(-3)).toEqual(['factory-reviewer', 'factory-reviewer', 'factory-qa-reporter']);
-    expect(r.toMerge).toEqual([2]);
-    expect((await tracker.get(2)).reviewedSha).toBe(pushed);
+    expect(runner.calls.map((c) => c.agent).slice(-4)).toEqual(['factory-reviewer', 'factory-reviewer', 'factory-qa-reporter', 'factory-planner']);
+    expect(r.merged).toEqual([2]);
+    expect(host.merges).toEqual([[5, pushed, 'merge']]);
     expect(host.statuses.map((s) => s[0])).toEqual([SHA, pushed]);
+    void tracker;
   });
 
   it('gives up on an agent that changes nothing, until the ticket changes', async () => {

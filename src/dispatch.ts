@@ -1,12 +1,13 @@
 // The dispatcher: reads the tickets, asks the router for the next step, runs that agent, and
-// repeats. One agent at a time on one runner machine. It never merges; it only marks a ticket
-// done once the owner (or, later, the merge queue) has merged its PR.
+// repeats. One agent at a time on one runner machine. It merges a PR itself once the reviewed
+// commit is green and the qa-reporter has posted its evidence; a PR the owner merged by hand
+// is marked done too.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { CodeHost } from './codehost.js';
 import type { Factory } from './factory.js';
-import { specStatus, type Ticket } from './lifecycle.js';
+import { PASSED_CONCLUSIONS, specStatus, type Ticket } from './lifecycle.js';
 import type { JsonlLog } from './logs.js';
 import { route, waitingOnOwner, type PrFacts, type Snapshot, type Step } from './router.js';
 import type { AgentRunner, RunResult } from './runner.js';
@@ -30,9 +31,9 @@ export interface RunRecord {
 export interface DispatchReport {
   next?: Step;
   runs: RunRecord[];
+  merged: number[];
   markedDone: number[];
   stuck: string[];
-  toMerge: number[];
   needsHuman: number[];
   stoppedBy: 'idle' | 'max-runs' | 'dry-run';
 }
@@ -71,6 +72,7 @@ export class Dispatcher {
         headSha: pr.headSha,
         merged: pr.merged,
         checksDone: checks.length > 0 && checks.every((c) => c.status === 'completed'),
+        checksGreen: checks.length > 0 && checks.every((c) => c.status === 'completed' && PASSED_CONCLUSIONS.includes(c.conclusion ?? '')),
       });
       const notes = (await this.d.tracker.comments(t.id)).filter((c) => c.body.startsWith('**qa-reporter**'));
       reported.set(t.id, new Set(notes.some((c) => c.body.includes(pr.headSha)) ? [pr.headSha] : []));
@@ -80,7 +82,7 @@ export class Dispatcher {
 
   async run(opts: DispatchOptions = {}): Promise<DispatchReport> {
     const maxRuns = opts.maxRuns ?? 25;
-    const report: DispatchReport = { runs: [], markedDone: [], stuck: [], toMerge: [], needsHuman: [], stoppedBy: 'idle' };
+    const report: DispatchReport = { runs: [], merged: [], markedDone: [], stuck: [], needsHuman: [], stoppedBy: 'idle' };
     // "agent:ticket" -> the ticket's fingerprint when that agent last changed nothing.
     const gaveUp = new Map<string, string>();
 
@@ -106,6 +108,20 @@ export class Dispatcher {
         await this.d.factory.move(step.ticket, { to: 'done', role: 'system', note: `PR #${t.pr} is merged.` });
         report.markedDone.push(step.ticket);
         this.out(`#${step.ticket} done (PR #${t.pr} merged)`);
+        continue;
+      }
+      if (step.kind === 'merge') {
+        const t = byId.get(step.ticket)!;
+        try {
+          await this.d.factory.merge(step.ticket, 'system');
+          report.merged.push(step.ticket);
+          this.out(`#${step.ticket} merged (PR #${t.pr}) and done`);
+        } catch (e) {
+          // Behind main, a conflict, or a check the host still wants: a human decides.
+          const why = e instanceof Error ? e.message : String(e);
+          await this.d.factory.move(step.ticket, { to: 'needs-human', role: 'system', reason: `could not merge: ${why}` });
+          this.out(`#${step.ticket} could not merge: ${why}`);
+        }
         continue;
       }
       if (step.kind === 're-review') {

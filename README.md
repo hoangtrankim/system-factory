@@ -14,7 +14,7 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 | --- | --- | --- |
 | 1 | Rules CLI, labels, GitHub tracker adapter, unit tests | done |
 | 2 | Agent prompts: Grill, Planner, Designer, QA test writer, Builder, Security, Reviewer, QA reporter | done, tuned by two dry runs on [todo-app](https://github.com/hoangtrankim/todo-app) |
-| 3 | CI gate, branch protection and merge queue | next: until then the owner merges each PR |
+| 3 | CI gate, branch protection, auto-merge, then the merge queue | CI gate, branch protection and auto-merge done; merge queue later |
 | 4 | `forge dispatch`: the loop that runs the agents, plus JSONL logs | done |
 | 5 | Parallel slots, then retro and lessons from the logs | later |
 
@@ -39,12 +39,12 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 6. **Security gate** (risky tickets only). A read-only security reviewer passes or fails the PR. A fail sends it back and costs a round. It also writes a risk note for the owner's weekly digest.
 7. **Review.** A read-only reviewer checks the PR against the spec, the design note, the ticket's components and the acceptance-test commits, a fixed list of quality rules, and runs the tests. Blocking findings send the ticket back with a typed reason. Minor ones become **Follow-ups**. A pass covers one commit only (see [the review gate](#the-review-gate)).
 8. **QA.** The QA reporter reads CI on the PR's head commit and posts per-test evidence on the ticket. Red CI sends the ticket back.
-9. **Merge.** The owner merges the PR (the merge queue takes over in phase 3). The dispatcher then marks the ticket done, which unblocks the next one.
+9. **Merge.** The dispatcher merges the PR itself once the reviewed commit is green and the QA evidence is posted (see [auto-merge](#auto-merge)), then marks the ticket done, which unblocks the next one. Nobody needs to review the PR.
 10. **Close.** When every ticket is done, the planner files the real follow-ups as new tickets, or closes the spec.
 
 A ticket sent back 3 times goes to `needs-human`. So does any question an agent cannot answer. Agents never guess past a gap in the spec.
 
-**Risky** means login or sessions, permissions or one user reaching another's data, payments, secrets, personal data, or bulk or irreversible deletion. A user deleting one of their own items is not risky. Risky tickets still merge without a human, but only after the security gate.
+**Risky** means login or sessions, permissions or one user reaching another's data, payments, secrets, personal data, or bulk or irreversible deletion. A user deleting one of their own items is not risky. Risky tickets still merge without a human, but only after the security gate, and the merge note on the ticket asks the owner to look at it afterwards.
 
 ## Run it
 
@@ -65,7 +65,7 @@ Then, for each piece of work:
 
 1. In Claude Code in the target repo, run `/factory-grill` and agree the spec.
 2. In a terminal in the same repo, run `forge dispatch --watch`.
-3. Merge each PR when it is ready. The dispatcher prints them, and each ticket has the QA evidence. The dispatcher notices the merge and carries on.
+3. That's it: green, reviewed PRs merge on their own. Look at what `Waiting on a human` lists, and at the risky tickets' merge notes.
 
 Check `forge dispatch --dry-run` at any time to see what would run next. `forge list --all` shows every ticket.
 
@@ -76,25 +76,39 @@ A step-by-step runbook for todo-app: https://claude.ai/artifact/CYF2fR38JET9qbkC
 `forge dispatch` reads the tickets, picks the next step from the routing table in `src/router.ts`, and runs that agent as its own process: `claude -p --agent factory-<role>`, given only the ticket number. It then reads the tickets again. The first matching rule wins:
 
 1. A spec with uncovered criteria → planner (split).
-2. `in-qa` with a merged PR → the dispatcher marks it done.
-3. `in-qa` with CI finished and no QA note for the head SHA → qa-reporter.
-4. Risky `in-review` without a passed gate → security.
-5. Other `in-review` → reviewer.
-6. `building` (a send-back, or a build that stopped) → builder.
-7. `designed` with tests ready and blockers done → builder.
-8. `designed` without tests → qa-writer.
-9. `planned` → designer.
-10. A spec whose tickets are all done → planner (close or file follow-ups).
+2. `in-qa` with a merged PR (merged by hand) → the dispatcher marks it done.
+3. `in-qa` whose PR head is not the reviewed commit → back to `in-review` (no round spent).
+4. `in-qa` at the reviewed commit, every check green, QA note posted for that commit → the dispatcher merges it and marks it done.
+5. `in-qa` with CI finished and no QA note for the head SHA → qa-reporter.
+6. Risky `in-review` without a passed gate → security.
+7. Other `in-review` → reviewer.
+8. `building` (a send-back, or a build that stopped) → builder.
+9. `designed` with tests ready and blockers done → builder.
+10. `designed` without tests → qa-writer.
+11. `planned` → designer.
+12. A spec whose tickets are all done → planner (close or file follow-ups).
 
 Finishing work comes before starting new work, and within a rule the lowest priority number goes first.
 
-The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on the ticket before each run. If a run changes nothing, it skips that agent on that ticket until the ticket changes. It never merges. A lock file stops a second dispatcher on the same repo.
+The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on the ticket before each run. If a run changes nothing, it skips that agent on that ticket until the ticket changes. A lock file stops a second dispatcher on the same repo.
 
 | Flag | Effect |
 | --- | --- |
 | `--dry-run` | print the next step only |
 | `--max-runs N` | stop after N agent runs (default 25; ignored with `--watch`) |
 | `--watch [--interval S]` | never stop; when idle, check again every S seconds (default 300) for merges and new specs |
+
+### Auto-merge
+
+Merging is a rule, not a judgement, so no agent does it. Once the qa-reporter has posted its evidence for the PR's head commit, the dispatcher runs the same check as `forge merge N --as owner`:
+
+- the ticket is `in-qa` and its PR is open;
+- the PR head is the commit the reviewer passed (`Reviewed: <sha>`);
+- every check on that commit has finished and passed.
+
+Then it merges over REST (`PUT /pulls/N/merge`) pinned to that commit, so a push that lands in between makes GitHub refuse the merge instead of merging unreviewed code. Branch protection checks again on GitHub's side (required `test` and `factory/review`, branch up to date). On success the ticket moves to `done` with a note naming the commit; a risky ticket's note asks the owner to look at it afterwards. If GitHub refuses (the branch is behind `main`, a conflict, a missing required check), the ticket goes to `needs-human` with GitHub's reason.
+
+This needs no repo setting: it is not GitHub's "auto-merge" button, which needs GraphQL and waits for checks. Here the checks have already finished when the merge runs. `mergeMethod` in `factory.config.yml` picks `merge` (default), `squash` or `rebase`, and the repo must allow that method.
 
 ### The guard hook
 
@@ -150,7 +164,7 @@ side states: blocked, needs-human
 | building → in-review | builder | a PR is given |
 | in-review → in-qa | reviewer | a `risky` ticket has passed the security gate; `--sha` is the PR's current head commit |
 | in-qa → in-review | system (the dispatcher) | the PR has commits the reviewer did not pass; no round is spent |
-| in-qa → done | system (the dispatcher) | the PR is linked; the dispatcher only does this once it is merged |
+| in-qa → done | system (the dispatcher) | the PR is linked; the dispatcher does this after it merges the PR, or once the owner has |
 | in-review → building | reviewer, security | a send-back reason; round + 1 |
 | in-qa → building | qa-reporter, system | a send-back reason; round + 1 |
 | building / in-review → designed | builder, reviewer | reason `flawed-test` only; round + 1, tests-ready cleared, so the QA writer fixes the test |
@@ -210,6 +224,7 @@ forge interface N                          # the design note's Public interface 
 forge pr N --as builder --body-file F      # open or find the PR for branch ticket-N
 forge diff N                               # the PR's diff
 forge checks N                             # CI on the PR head, and whether it is merged; exit 3 failed, 4 pending
+forge merge N --as owner                   # merge the reviewed, green PR now and mark the ticket done
 forge dispatch [--dry-run] [--max-runs N] [--watch [--interval S]]
 ```
 

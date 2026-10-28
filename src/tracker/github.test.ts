@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GhError, GitHubTracker, issueToTicket, type GhRequest } from './github.js';
 import { NotFoundError } from './tracker.js';
+import { GitHubCodeHost } from '../codehost.js';
 
 function fakeGh(routes: Record<string, (req: GhRequest) => unknown>) {
   const calls: GhRequest[] = [];
@@ -123,5 +124,13 @@ describe('GitHubTracker', () => {
     const put = calls.at(-1)?.body as { content: string; branch: string };
     expect(put.branch).toBe('factory-evidence');
     expect(Buffer.from(put.content, 'base64').toString()).toBe('ok');
+  });
+});
+
+describe('GitHubCodeHost.merge', () => {
+  it('merges over REST, pinned to the head commit', async () => {
+    const { gh, calls } = fakeGh({ 'PUT repos/o/r/pulls/7/merge': () => ({ merged: true }) });
+    await new GitHubCodeHost('o/r', gh).merge(7, 'abc', 'squash');
+    expect(calls).toEqual([{ method: 'PUT', path: 'repos/o/r/pulls/7/merge', body: { sha: 'abc', merge_method: 'squash' } }]);
   });
 });

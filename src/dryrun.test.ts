@@ -39,6 +39,11 @@ class FakeHost implements CodeHost {
     return this.checkRuns;
   }
   async setStatus() {}
+  merges: Array<[number, string, string]> = [];
+  async merge(n: number, sha: string, method: string) {
+    this.merges.push([n, sha, method]);
+    Object.assign(await this.getPr(n), { state: 'closed', merged: true });
+  }
 }
 
 describe('flawed-test send-back', () => {
@@ -158,6 +163,25 @@ describe('CLI', () => {
     expect(JSON.parse(lines.slice(lines.findLastIndex((l) => l.startsWith('{'))).join('\n'))).toMatchObject({ merged: true });
   });
 
+  it('merges a reviewed, green PR for the owner, and notes a risky one', async () => {
+    const { exec, tracker, codeHost, lines } = await harness();
+    const sha = 'a'.repeat(40);
+    await tracker.update({ ...(await tracker.get(2)), state: 'in-qa', pr: 7, reviewedSha: sha, risky: true });
+    codeHost.prs.push({ number: 7, url: 'u', head: 'ticket-2', headSha: sha, state: 'open', merged: false });
+    codeHost.checkRuns = [{ name: 'test', url: 'u', status: 'completed', conclusion: 'failure' }];
+    await expect(exec('merge 2 --as owner')).rejects.toThrow(/checks failed: test/);
+    codeHost.checkRuns = [{ name: 'test', url: 'u', status: 'completed', conclusion: 'success' }];
+    await expect(exec('merge 2 --as qa-reporter')).rejects.toThrow(/only the dispatcher or the owner/);
+    expect(codeHost.merges).toEqual([]);
+    expect(await exec('merge 2 --as owner')).toBe(0);
+    expect(codeHost.merges).toEqual([[7, sha, 'merge']]);
+    expect(await tracker.get(2)).toMatchObject({ state: 'done', closed: true });
+    const comment = tracker.posted.get(2)?.at(-1) ?? '';
+    expect(comment).toContain(`PR #7 merged by the owner (merge) at the reviewed commit ${sha}`);
+    expect(comment).toContain('marked risky');
+    expect(lines.at(-1)).toContain('#2');
+  });
+
   it('edits risk with --not-risky', async () => {
     const { exec, tracker } = await harness();
     await exec('edit 2 --as planner --risky');
@@ -172,6 +196,15 @@ describe('config components', () => {
     const dir = mkdtempSync(join(tmpdir(), 'factory-'));
     writeFileSync(join(dir, 'factory.config.yml'), 'base: trunk\ncomponents:\n  ui: [public/**]\n  server: server.js\n');
     expect(loadConfig(dir)).toMatchObject({ base: 'trunk', components: { ui: ['public/**'], server: ['server.js'] } });
+  });
+
+  it('reads the merge method, and rejects an unknown one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-'));
+    expect(loadConfig(dir).mergeMethod).toBe('merge');
+    writeFileSync(join(dir, 'factory.config.yml'), 'mergeMethod: squash\n');
+    expect(loadConfig(dir).mergeMethod).toBe('squash');
+    writeFileSync(join(dir, 'factory.config.yml'), 'mergeMethod: fast-forward\n');
+    expect(() => loadConfig(dir)).toThrow(/mergeMethod must be one of/);
   });
 
   it('rejects a malformed map', () => {
