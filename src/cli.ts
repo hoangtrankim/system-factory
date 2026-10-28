@@ -13,6 +13,7 @@ import { JsonlLog, logDir } from './logs.js';
 import { ClaudeRunner, DEFAULT_CLAUDE_ARGS, type AgentRunner } from './runner.js';
 import { init } from './init.js';
 import { runGuard } from './guard.js';
+import { formatReport, loadLogs, reviewerReport } from './report.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
 
@@ -41,6 +42,7 @@ Commands
   note <id> --as R (--note N | --note-file F)   Comment on a ticket
   evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
+  report [--date YYYY-MM-DD | --days N]   The reviewer report from the logs (default: today)
   close-spec <id> --as R
   guard                                   PreToolUse hook: checks a read-only agent's Bash command
                                           (stdin: the hook event, FACTORY_ROLE: the agent's role)
@@ -135,6 +137,7 @@ export interface Deps {
   runner?: AgentRunner;
   logDir?: string;
   out?: (s: string) => void;
+  now?: () => Date;
   cwd?: string;
 }
 
@@ -342,6 +345,27 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       const file = rest[1];
       if (!file) throw new UsageError('evidence <id> <file>');
       out(await factory.evidence(id(rest[0]), role(a), basename(file), readFileSync(resolve(deps.cwd ?? process.cwd(), file))));
+      return 0;
+    }
+
+    case 'report': {
+      // A local calendar day (default today), or the last N days with --days.
+      const days = flag(a, 'days');
+      const date = flag(a, 'date');
+      let from: Date;
+      let to: Date;
+      if (days) {
+        to = deps.now?.() ?? new Date();
+        from = new Date(to.getTime() - Number(days) * 86400000);
+      } else {
+        const d = date ? new Date(`${date}T00:00:00`) : (deps.now?.() ?? new Date());
+        if (Number.isNaN(d.getTime())) throw new UsageError(`--date must be YYYY-MM-DD`);
+        from = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
+      }
+      const { events, runs } = loadLogs(deps.logDir ?? logDir(repo()));
+      const r = reviewerReport(events, runs, from, to);
+      out(json ? JSON.stringify(r, null, 2) : formatReport(r));
       return 0;
     }
 

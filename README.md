@@ -107,6 +107,8 @@ Logs record facts, not transcripts. They go to `~/.factory/logs/<owner>/<repo>/`
 - `events.jsonl` has every ticket change made through the CLI, including the agents' own: moves, gates, notes, rounds, escalations.
 - `runs.jsonl` has one line per agent run: ticket, agent, rule, exit code, duration, cost, turns, session id, whether it changed anything, and its one-line summary.
 
+`forge report` turns them into the end-of-day **reviewer report**: reviews, pass rate, send-backs by reason, re-reviews after a push, tickets done and their rounds, reviewer run time and cost, and **escapes**, meaning PRs the reviewer passed that QA or the owner sent back later. Escapes only count mistakes someone found; a planted-bug benchmark comes with the retro agent. To get it every evening on the runner machine, add a cron line such as `55 23 * * * cd ~/todo-app && forge report > ~/.factory/reports/$(date +\%F).md`.
+
 ## Agents
 
 Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `skills/`. `forge init` copies them into a project's `.claude/` folder. Every agent:
@@ -202,6 +204,7 @@ forge gate N security pass|fail --as security [--reason R] --note-file F
 forge note N --as R --note-file F
 forge evidence N <file> --as qa-reporter   # upload, print the link
 forge close-spec S --as planner
+forge report [--date YYYY-MM-DD | --days N]   # reviewer report from the logs (default: today)
 
 forge interface N                          # the design note's Public interface only
 forge pr N --as builder --body-file F      # open or find the PR for branch ticket-N
