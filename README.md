@@ -96,6 +96,10 @@ The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on 
 | `--max-runs N` | stop after N agent runs (default 25; ignored with `--watch`) |
 | `--watch [--interval S]` | never stop; when idle, check again every S seconds (default 300) for merges and new specs |
 
+### The guard hook
+
+The reviewer and the security reviewer keep `Bash` so they can run `forge`, git and the tests, but the dispatcher runs them with a Claude Code `PreToolUse` hook, `forge guard` (`src/guard.ts`). It checks every command before it runs and blocks anything outside a read-only list: no `git push`, `commit`, `checkout` or `reset`, no `forge --as` another role, no writes outside `/tmp/factory`, `npm` only inside a throwaway worktree under `/tmp/factory`, `curl` only to localhost, and no `$( )`, backticks or `&`. A blocked command is refused with the reason, and unreadable input is refused too. The runner passes the hook with `--settings` and sets `FACTORY_ROLE`, so the target repo's own settings are untouched. Other roles are not guarded yet.
+
 ### Logs
 
 Logs record facts, not transcripts. They go to `~/.factory/logs/<owner>/<repo>/`, or `FACTORY_LOG_DIR` if set, and the phase 5 retro will read them:

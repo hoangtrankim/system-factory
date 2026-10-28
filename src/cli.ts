@@ -12,6 +12,7 @@ import { Dispatcher, Lock } from './dispatch.js';
 import { JsonlLog, logDir } from './logs.js';
 import { ClaudeRunner, DEFAULT_CLAUDE_ARGS, type AgentRunner } from './runner.js';
 import { init } from './init.js';
+import { runGuard } from './guard.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
 
@@ -41,6 +42,8 @@ Commands
   evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
   close-spec <id> --as R
+  guard                                   PreToolUse hook: checks a read-only agent's Bash command
+                                          (stdin: the hook event, FACTORY_ROLE: the agent's role)
   dispatch [--dry-run] [--max-runs N] [--watch [--interval SECONDS]]
                                           Run the agents ticket by ticket until a PR needs
                                           merging, a ticket needs a human, or nothing can move
@@ -399,6 +402,15 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  // The hook entry point: no repo or config needed, and it must answer fast.
+  if (argv[0] === 'guard') {
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const r = runGuard(input, process.env.FACTORY_ROLE);
+    if (r.message) console.error(r.message);
+    process.exitCode = r.code;
+    return;
+  }
   try {
     process.exitCode = await run(argv);
   } catch (e) {

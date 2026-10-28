@@ -237,5 +237,7 @@ process.stdin.on('data', (d) => (input += d)).on('end', () =>
     const r = await new ClaudeRunner(bin).run({ agent: 'factory-designer', prompt: 'Ticket 8.', cwd: dir });
     expect(r.ok).toBe(true);
     expect(r.summary).toBe('Ticket 8. | -p --agent factory-designer --output-format json --permission-mode acceptEdits --allowedTools Bash');
+    const guarded = await new ClaudeRunner(bin).run({ agent: 'factory-reviewer', prompt: 'Ticket 8.', cwd: dir });
+    expect(guarded.summary).toMatch(/--agent factory-reviewer --output-format json --settings \{"hooks":\{"PreToolUse".*guard"\}\]\}\]\}\} --permission-mode/);
   });
 });
