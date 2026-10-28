@@ -48,6 +48,8 @@ export function init(target: string, opts: { force?: boolean; repo?: string; sou
     ...(opts.repo ? [`repo: ${opts.repo}`] : []),
     'base: main',
     'maxRounds: 3',
+    '# How the factory merges a reviewed, green PR: merge, squash or rebase.',
+    'mergeMethod: merge',
     '# Component name -> paths it owns. Tickets are tagged with these names; the reviewer',
     '# checks that a PR stays inside its components (tests/ is always allowed).',
     'components:',

@@ -29,7 +29,13 @@ export interface CodeHost {
   checks(number: number): Promise<Check[]>;
   // A commit status. Statuses belong to one commit, so a new push starts without them.
   setStatus(sha: string, context: string, state: 'success' | 'failure' | 'pending', description: string): Promise<void>;
+  // Merges only if the PR head is still `sha`. Branch protection (required checks, up to date)
+  // is enforced by the host, so a merge it refuses throws.
+  merge(number: number, sha: string, method: MergeMethod): Promise<void>;
 }
+
+export type MergeMethod = 'merge' | 'squash' | 'rebase';
+export const MERGE_METHODS: readonly MergeMethod[] = ['merge', 'squash', 'rebase'];
 
 interface GhPull {
   number: number;
@@ -90,5 +96,9 @@ export class GitHubCodeHost implements CodeHost {
 
   async setStatus(sha: string, context: string, state: 'success' | 'failure' | 'pending', description: string): Promise<void> {
     await this.gh({ method: 'POST', path: this.path(`statuses/${sha}`), body: { state, context, description } });
+  }
+
+  async merge(number: number, sha: string, method: MergeMethod): Promise<void> {
+    await this.gh({ method: 'PUT', path: this.path(`pulls/${number}/merge`), body: { sha, merge_method: method } });
   }
 }

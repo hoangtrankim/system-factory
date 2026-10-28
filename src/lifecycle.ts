@@ -282,6 +282,33 @@ export function publicInterface(comments: string[]): string | undefined {
   return undefined;
 }
 
+// What the code host says about a PR right before a merge.
+export interface MergeFacts {
+  headSha: string;
+  open: boolean;
+  checks: Array<{ name: string; status: string; conclusion: string | null }>;
+}
+
+export const PASSED_CONCLUSIONS = ['success', 'neutral', 'skipped'];
+
+// Only the commit the reviewer passed may merge, and only once every check on it is green.
+// The host's branch protection checks again; this refuses early with a reason.
+export function canMerge(ticket: Ticket, role: Role, pr: MergeFacts): Check {
+  if (role !== 'system' && role !== 'owner') return refuse(`only the dispatcher or the owner may merge`);
+  if (ticket.type !== 'build') return refuse(`#${ticket.id} is a spec`);
+  if (ticket.state !== 'in-qa') return refuse(`merge from in-qa (#${ticket.id} is ${ticket.state})`);
+  if (!ticket.pr) return refuse(`#${ticket.id} has no PR`);
+  if (!pr.open) return refuse(`PR #${ticket.pr} is not open`);
+  if (!ticket.reviewedSha) return refuse(`#${ticket.id} has no reviewed commit`);
+  if (pr.headSha !== ticket.reviewedSha) return refuse(`PR #${ticket.pr} is at ${pr.headSha}, not the reviewed ${ticket.reviewedSha}`);
+  if (!pr.checks.length) return refuse(`PR #${ticket.pr} has no checks yet`);
+  const waiting = pr.checks.filter((c) => c.status !== 'completed');
+  if (waiting.length) return refuse(`checks still running: ${waiting.map((c) => c.name).join(', ')}`);
+  const red = pr.checks.filter((c) => !PASSED_CONCLUSIONS.includes(c.conclusion ?? ''));
+  if (red.length) return refuse(`checks failed: ${red.map((c) => c.name).join(', ')}`);
+  return ok;
+}
+
 export function canUploadEvidence(role: Role): Check {
   if (role !== 'qa-reporter' && role !== 'system' && role !== 'owner') return refuse(`only qa-reporter may upload evidence`);
   return ok;

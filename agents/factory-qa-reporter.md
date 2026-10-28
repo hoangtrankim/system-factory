@@ -37,7 +37,7 @@ If downloads or uploads are blocked (some networks are), do not stop: link the C
 
 4. Write the evidence note: a table with one row per acceptance test (the `AC-n:` tests in `tests/acceptance/ticket-N.spec.*` at the head SHA: `git fetch origin ticket-N && git show FETCH_HEAD:tests/acceptance/<file>`), grouped by `AC-n`, with pass or fail and its screenshot link if any; then the CI run link, the artifact link and the head SHA.
 5. Decide:
-   - **All checks green:** post the evidence and leave the ticket in `in-qa`; the merge queue merges the PR and the factory marks it done.
+   - **All checks green:** post the evidence and leave the ticket in `in-qa`. Do not merge: once your note names the head SHA, the dispatcher merges that commit and marks the ticket done.
 
      ```sh
      forge note N --as qa-reporter --note-file /tmp/factory/qa-reporter-N.md

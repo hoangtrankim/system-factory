@@ -6,6 +6,7 @@ import {
   canCloseSpec,
   canCreate,
   canMarkTestsReady,
+  canMerge,
   canMove,
   canRecordGate,
   pickReady,
@@ -242,5 +243,30 @@ describe('pickReady', () => {
     ];
     expect(pickReady(tickets).map((t) => t.id)).toEqual([6, 4, 5, 11]);
     expect(pickReady(tickets, 2).map((t) => t.id)).toEqual([6, 4]);
+  });
+});
+
+describe('canMerge', () => {
+  const green = { headSha: SHA, open: true, checks: [{ name: 'test', status: 'completed', conclusion: 'success' }] };
+  const inQa = ticket({ state: 'in-qa', pr: 5, reviewedSha: SHA });
+
+  it('merges only the reviewed head of an open PR, with every check green', () => {
+    expect(canMerge(inQa, 'system', green)).toEqual({ ok: true });
+    expect(canMerge(inQa, 'owner', green)).toEqual({ ok: true });
+    expect(canMerge(inQa, 'system', { ...green, headSha: 'f'.repeat(40) })).toMatchObject({ error: expect.stringMatching(/not the reviewed/) });
+    expect(canMerge(inQa, 'system', { ...green, open: false })).toMatchObject({ error: expect.stringMatching(/not open/) });
+    expect(canMerge(ticket({ state: 'in-qa', pr: 5 }), 'system', green)).toMatchObject({ error: expect.stringMatching(/no reviewed commit/) });
+  });
+
+  it('refuses agents, other states and checks that are missing, running or red', () => {
+    expect(canMerge(inQa, 'qa-reporter', green).ok).toBe(false);
+    expect(canMerge(inQa, 'builder', green).ok).toBe(false);
+    expect(canMerge({ ...inQa, state: 'in-review' }, 'system', green).ok).toBe(false);
+    expect(canMerge({ ...inQa, pr: undefined }, 'system', green).ok).toBe(false);
+    expect(canMerge(inQa, 'system', { ...green, checks: [] })).toMatchObject({ error: expect.stringMatching(/no checks/) });
+    const running = [{ name: 'test', status: 'in_progress', conclusion: null }];
+    expect(canMerge(inQa, 'system', { ...green, checks: running })).toMatchObject({ error: 'checks still running: test' });
+    const red = [...green.checks, { name: 'lint', status: 'completed', conclusion: 'failure' }];
+    expect(canMerge(inQa, 'system', { ...green, checks: red })).toMatchObject({ error: 'checks failed: lint' });
   });
 });

@@ -10,6 +10,8 @@ export interface PrFacts {
   merged: boolean;
   // Every check has finished (passed or failed). No checks yet counts as not finished.
   checksDone: boolean;
+  // Every check finished and passed.
+  checksGreen: boolean;
 }
 
 export interface Snapshot {
@@ -24,6 +26,7 @@ export interface Snapshot {
 export type Step =
   | { kind: 'agent'; agent: AgentRole; ticket: number; prompt: string; rule: string }
   | { kind: 'mark-done'; ticket: number; rule: string }
+  | { kind: 'merge'; ticket: number; rule: string }
   | { kind: 're-review'; ticket: number; rule: string };
 
 interface Rule {
@@ -43,6 +46,10 @@ const agent = (role: AgentRole, prompt: (t: Ticket) => string, rule: string) => 
 const ticketPrompt = (t: Ticket) => `Ticket ${t.id}${t.spec ? ` (spec ${t.spec})` : ''}. Follow your prompt.`;
 const build = (t: Ticket) => t.type === 'build' && !t.closed;
 const reviewedHead = (t: Ticket, s: Snapshot) => !!t.reviewedSha && s.prs.get(t.id)?.headSha === t.reviewedSha;
+const reportedHead = (t: Ticket, s: Snapshot) => {
+  const pr = s.prs.get(t.id);
+  return !!pr && !pr.merged && reviewedHead(t, s) && pr.checksDone && !!s.reported.get(t.id)?.has(pr.headSha);
+};
 
 // Checked in order; the first rule with a matching ticket wins. Finishing work comes before
 // starting new work, so a ticket in review is never starved by fresh designs.
@@ -57,6 +64,13 @@ export const ROUTES: readonly Rule[] = [
     name: 'pushed-after-review',
     match: (t, s) => build(t) && t.state === 'in-qa' && !reviewedHead(t, s) && !s.prs.get(t.id)?.merged && s.prs.has(t.id),
     step: (t) => ({ kind: 're-review', ticket: t.id, rule: 'pushed-after-review' }),
+  },
+  {
+    // Reviewed, green, and the qa-reporter posted its evidence for this commit: merge it.
+    // A red PR the qa-reporter left in in-qa is not merged; it waits for the owner.
+    name: 'merge-green',
+    match: (t, s) => build(t) && t.state === 'in-qa' && reportedHead(t, s) && !!s.prs.get(t.id)?.checksGreen,
+    step: (t) => ({ kind: 'merge', ticket: t.id, rule: 'merge-green' }),
   },
   {
     name: 'qa-report',
@@ -130,15 +144,12 @@ export function route(s: Snapshot, skip: ReadonlySet<string> = new Set()): Step 
 }
 
 // Tickets that wait on the owner rather than an agent, for the dispatcher's report.
-export function waitingOnOwner(s: Snapshot): { toMerge: number[]; needsHuman: number[] } {
+export function waitingOnOwner(s: Snapshot): { needsHuman: number[] } {
   const open = s.tickets.filter(build);
   return {
-    toMerge: open
-      .filter((t) => {
-        const pr = s.prs.get(t.id);
-        return t.state === 'in-qa' && !!pr && !pr.merged && reviewedHead(t, s) && pr.checksDone && !!s.reported.get(t.id)?.has(pr.headSha);
-      })
+    // A red PR the qa-reporter reported on but did not send back also waits on the owner.
+    needsHuman: open
+      .filter((t) => t.state === 'needs-human' || t.state === 'blocked' || (t.state === 'in-qa' && reportedHead(t, s) && !s.prs.get(t.id)?.checksGreen))
       .map((t) => t.id),
-    needsHuman: open.filter((t) => t.state === 'needs-human' || t.state === 'blocked').map((t) => t.id),
   };
 }

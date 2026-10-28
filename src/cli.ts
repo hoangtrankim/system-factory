@@ -6,7 +6,7 @@ import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, resolveRepo } from './config.js';
 import { Factory, RuleError } from './factory.js';
-import { GATES, ROLES, STATES, isRole, isState, type Gate, type Priority, type Role, type Ticket } from './lifecycle.js';
+import { GATES, PASSED_CONCLUSIONS, ROLES, STATES, isRole, isState, type Gate, type Priority, type Role, type Ticket } from './lifecycle.js';
 import { GitHubCodeHost, type CodeHost } from './codehost.js';
 import { Dispatcher, Lock } from './dispatch.js';
 import { JsonlLog, logDir } from './logs.js';
@@ -35,6 +35,8 @@ Commands
   diff <id>                               The diff of the ticket's PR
   checks <id>                             CI checks of the PR's head commit, and whether it is merged;
                                           exit 3 if any failed, 4 if pending or none yet
+  merge <id> --as owner                   Merge the reviewed commit once every check is green, mark done
+                                          (the dispatcher does this itself after the QA report)
   move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N] [--sha SHA]
                                           a reviewer's pass to in-qa needs --sha, the commit reviewed
   tests-ready <id> --as qa-writer [--note N | --note-file F]
@@ -47,8 +49,8 @@ Commands
   guard                                   PreToolUse hook: checks a read-only agent's Bash command
                                           (stdin: the hook event, FACTORY_ROLE: the agent's role)
   dispatch [--dry-run] [--max-runs N] [--watch [--interval SECONDS]]
-                                          Run the agents ticket by ticket until a PR needs
-                                          merging, a ticket needs a human, or nothing can move
+                                          Run the agents ticket by ticket, merging green reviewed
+                                          PRs, until a ticket needs a human or nothing can move
 
 Commands that read GitHub use the REST API only, so they work where GraphQL is blocked.
 
@@ -167,6 +169,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     maxRounds: config.maxRounds,
     codeHost,
     baseBranch: config.base,
+    mergeMethod: config.mergeMethod,
     onEvent: (e) => log?.write('events', e),
   });
   const body = () => {
@@ -268,10 +271,14 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
             : '(no checks yet)',
         );
       }
-      if (checks.some((c) => c.conclusion && !['success', 'neutral', 'skipped'].includes(c.conclusion))) return 3;
+      if (checks.some((c) => c.conclusion && !PASSED_CONCLUSIONS.includes(c.conclusion))) return 3;
       if (!checks.length || checks.some((c) => c.status !== 'completed')) return 4;
       return 0;
     }
+
+    case 'merge':
+      print(await factory.merge(id(rest[0]), role(a)));
+      return 0;
 
     case 'next': {
       const limit = flag(a, 'limit');
@@ -405,12 +412,12 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         else {
           if (dryRun) {
             const n = r.next;
-            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
+            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 'merge' ? `Next: merge the PR of #${n.ticket} (reviewed, green, reported)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
           } else {
             out(`\n${r.runs.length} agent run(s); stopped: ${r.stoppedBy}`);
+            if (r.merged.length) out(`Merged: ${r.merged.map((n) => `#${n}`).join(', ')}`);
             if (r.markedDone.length) out(`Done: ${r.markedDone.map((n) => `#${n}`).join(', ')}`);
           }
-          if (r.toMerge.length) out(`Ready for you to merge: ${r.toMerge.map((n) => `#${n}`).join(', ')}`);
           if (r.needsHuman.length) out(`Waiting on a human: ${r.needsHuman.map((n) => `#${n}`).join(', ')}`);
           if (r.stuck.length) out(`Stuck (agent changed nothing): ${r.stuck.join(', ')}`);
         }
