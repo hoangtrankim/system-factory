@@ -412,7 +412,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         else {
           if (dryRun) {
             const n = r.next;
-            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 'merge' ? `Next: merge the PR of #${n.ticket} (reviewed, green, reported)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
+            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 'merge' ? `Next: merge the PR of #${n.ticket} (reviewed, green, reported)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : n.kind === 'update-branch' ? `Next: merge main into the PR of #${n.ticket} (behind main), then review again` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
           } else {
             out(`\n${r.runs.length} agent run(s); stopped: ${r.stoppedBy}`);
             if (r.merged.length) out(`Merged: ${r.merged.map((n) => `#${n}`).join(', ')}`);

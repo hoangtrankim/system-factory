@@ -10,6 +10,8 @@ export interface PullRequest {
   headSha: string;
   state: 'open' | 'closed';
   merged: boolean;
+  // The base branch has commits the PR does not, and the host wants it up to date to merge.
+  behind?: boolean;
 }
 
 export interface Check {
@@ -32,6 +34,9 @@ export interface CodeHost {
   // Merges only if the PR head is still `sha`. Branch protection (required checks, up to date)
   // is enforced by the host, so a merge it refuses throws.
   merge(number: number, sha: string, method: MergeMethod): Promise<void>;
+  // Merges the base branch into the PR, only if its head is still `sha`. The new head is a
+  // new commit, so it needs its own review and checks.
+  updateBranch(number: number, sha: string): Promise<void>;
 }
 
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
@@ -43,6 +48,7 @@ interface GhPull {
   head: { ref: string; sha: string };
   state: 'open' | 'closed';
   merged_at: string | null;
+  mergeable_state?: string;
 }
 
 const toPr = (p: GhPull): PullRequest => ({
@@ -52,6 +58,7 @@ const toPr = (p: GhPull): PullRequest => ({
   headSha: p.head.sha,
   state: p.state,
   merged: !!p.merged_at,
+  behind: p.mergeable_state === 'behind',
 });
 
 export class GitHubCodeHost implements CodeHost {
@@ -100,5 +107,9 @@ export class GitHubCodeHost implements CodeHost {
 
   async merge(number: number, sha: string, method: MergeMethod): Promise<void> {
     await this.gh({ method: 'PUT', path: this.path(`pulls/${number}/merge`), body: { sha, merge_method: method } });
+  }
+
+  async updateBranch(number: number, sha: string): Promise<void> {
+    await this.gh({ method: 'PUT', path: this.path(`pulls/${number}/update-branch`), body: { expected_head_sha: sha } });
   }
 }

@@ -44,6 +44,7 @@ class FakeHost implements CodeHost {
     this.merges.push([n, sha, method]);
     Object.assign(await this.getPr(n), { state: 'closed', merged: true });
   }
+  async updateBranch() {}
 }
 
 describe('flawed-test send-back', () => {

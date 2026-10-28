@@ -78,19 +78,20 @@ A step-by-step runbook for todo-app: https://claude.ai/artifact/CYF2fR38JET9qbkC
 1. A spec with uncovered criteria → planner (split).
 2. `in-qa` with a merged PR (merged by hand) → the dispatcher marks it done.
 3. `in-qa` whose PR head is not the reviewed commit → back to `in-review` (no round spent).
-4. `in-qa` at the reviewed commit, every check green, QA note posted for that commit → the dispatcher merges it and marks it done.
-5. `in-qa` with CI finished and no QA note for the head SHA → qa-reporter.
-6. Risky `in-review` without a passed gate → security.
-7. Other `in-review` → reviewer.
-8. `building` (a send-back, or a build that stopped) → builder.
-9. `designed` with tests ready and blockers done → builder.
-10. `designed` without tests → qa-writer.
-11. `planned` → designer.
-12. A spec whose tickets are all done → planner (close or file follow-ups).
+4. `in-qa` at the reviewed commit, but the PR is behind `main` → the dispatcher merges `main` into the PR and sends it back to `in-review` (no round spent).
+5. `in-qa` at the reviewed commit, every check green, QA note posted for that commit → the dispatcher merges it and marks it done.
+6. `in-qa` with CI finished and no QA note for the head SHA → qa-reporter.
+7. Risky `in-review` without a passed gate → security.
+8. Other `in-review` → reviewer.
+9. `building` (a send-back, or a build that stopped) → builder.
+10. `designed` with tests ready and blockers done → builder.
+11. `designed` without tests → qa-writer.
+12. `planned` → designer.
+13. A spec whose tickets are all done → planner (close or file follow-ups).
 
 Finishing work comes before starting new work, and within a rule the lowest priority number goes first.
 
-The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on the ticket before each run. If a run changes nothing, it skips that agent on that ticket until the ticket changes. A lock file stops a second dispatcher on the same repo.
+The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on the ticket before each run. If a run changes nothing, it skips that agent on that ticket until the ticket changes. If a run fails because `claude` is not logged in, the dispatcher stops instead (run `claude auth login`, then start it again). A lock file stops a second dispatcher on the same repo.
 
 | Flag | Effect |
 | --- | --- |
@@ -106,7 +107,9 @@ Merging is a rule, not a judgement, so no agent does it. Once the qa-reporter ha
 - the PR head is the commit the reviewer passed (`Reviewed: <sha>`);
 - every check on that commit has finished and passed.
 
-Then it merges over REST (`PUT /pulls/N/merge`) pinned to that commit, so a push that lands in between makes GitHub refuse the merge instead of merging unreviewed code. Branch protection checks again on GitHub's side (required `test` and `factory/review`, branch up to date). On success the ticket moves to `done` with a note naming the commit; a risky ticket's note asks the owner to look at it afterwards. If GitHub refuses (the branch is behind `main`, a conflict, a missing required check), the ticket goes to `needs-human` with GitHub's reason.
+Then it merges over REST (`PUT /pulls/N/merge`) pinned to that commit, so a push that lands in between makes GitHub refuse the merge instead of merging unreviewed code. Branch protection checks again on GitHub's side (required `test` and `factory/review`, branch up to date). On success the ticket moves to `done` with a note naming the commit; a risky ticket's note asks the owner to look at it afterwards. If GitHub refuses (a conflict, a missing required check), the ticket goes to `needs-human` with GitHub's reason.
+
+A PR that is behind `main` (another ticket merged first, and branch protection wants branches up to date) is not merged as it is. The dispatcher calls `PUT /pulls/N/update-branch`, pinned to the reviewed commit, and moves the ticket back to `in-review`. The merge commit is new code to the reviewer and to CI, so it goes through review, checks and QA again before it can merge, without costing a round. If `main` does not merge cleanly, the ticket goes to `needs-human`.
 
 This needs no repo setting: it is not GitHub's "auto-merge" button, which needs GraphQL and waits for checks. Here the checks have already finished when the merge runs. `mergeMethod` in `factory.config.yml` picks `merge` (default), `squash` or `rebase`, and the repo must allow that method.
 
