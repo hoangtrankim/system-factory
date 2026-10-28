@@ -73,7 +73,11 @@ export interface MoveInput {
   reason?: string;
   note?: string;
   pr?: number;
+  sha?: string;
 }
+
+// The required commit status that says "the reviewer passed this exact commit".
+export const REVIEW_STATUS = 'factory/review';
 
 function check(c: Check): void {
   if (!c.ok) throw new RuleError(c.error);
@@ -134,6 +138,7 @@ export class Factory {
     const ticket = await this.tracker.get(id);
     const openBlockers = await this.openBlockers(ticket);
     check(canMove(ticket, input, { openBlockers }));
+    if (input.to === 'in-qa') await this.checkReviewedHead(ticket, input.sha!);
 
     const { ticket: next, escalated } = applyMove(ticket, input, this.maxRounds);
     const saved = await this.tracker.update(next);
@@ -145,6 +150,9 @@ export class Factory {
     if (!escalated && next.round !== ticket.round) text += ` (round ${next.round} of ${this.maxRounds})`;
     if (input.note) text += `\n\n${input.note}`;
     await this.tracker.comment(id, text);
+    if (saved.state === 'in-qa' && saved.reviewedSha && this.opts.codeHost) {
+      await this.opts.codeHost.setStatus(saved.reviewedSha, REVIEW_STATUS, 'success', `Reviewed as ticket #${id}`);
+    }
 
     this.emit({
       kind: 'move',
@@ -157,6 +165,16 @@ export class Factory {
       escalated,
     });
     return saved;
+  }
+
+  // The reviewer must have read the commit the PR points at now, or the pass would cover
+  // code nobody reviewed.
+  private async checkReviewedHead(ticket: Ticket, sha: string): Promise<void> {
+    if (!this.opts.codeHost || !ticket.pr) return;
+    const pr = await this.opts.codeHost.getPr(ticket.pr);
+    if (pr.headSha !== sha) {
+      throw new RuleError(`PR #${pr.number} is at ${pr.headSha}, not the reviewed ${sha}; review the new head`);
+    }
   }
 
   async markTestsReady(id: number, role: Role, note?: string): Promise<Ticket> {

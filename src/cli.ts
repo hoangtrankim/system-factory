@@ -12,6 +12,8 @@ import { Dispatcher, Lock } from './dispatch.js';
 import { JsonlLog, logDir } from './logs.js';
 import { ClaudeRunner, DEFAULT_CLAUDE_ARGS, type AgentRunner } from './runner.js';
 import { init } from './init.js';
+import { runGuard } from './guard.js';
+import { formatReport, loadLogs, reviewerReport } from './report.js';
 import { GitHubTracker } from './tracker/github.js';
 import type { Tracker } from './tracker/tracker.js';
 
@@ -33,13 +35,17 @@ Commands
   diff <id>                               The diff of the ticket's PR
   checks <id>                             CI checks of the PR's head commit, and whether it is merged;
                                           exit 3 if any failed, 4 if pending or none yet
-  move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N]
+  move <id> <state> --as R [--reason R] [--note N | --note-file F] [--pr N] [--sha SHA]
+                                          a reviewer's pass to in-qa needs --sha, the commit reviewed
   tests-ready <id> --as qa-writer [--note N | --note-file F]
   gate <id> <gate> pass|fail --as R [--reason R] [--note N | --note-file F]
   note <id> --as R (--note N | --note-file F)   Comment on a ticket
   evidence <id> <file> --as qa-reporter          Upload an evidence file, print its link
   spec-status <id>
+  report [--date YYYY-MM-DD | --days N]   The reviewer report from the logs (default: today)
   close-spec <id> --as R
+  guard                                   PreToolUse hook: checks a read-only agent's Bash command
+                                          (stdin: the hook event, FACTORY_ROLE: the agent's role)
   dispatch [--dry-run] [--max-runs N] [--watch [--interval SECONDS]]
                                           Run the agents ticket by ticket until a PR needs
                                           merging, a ticket needs a human, or nothing can move
@@ -131,6 +137,7 @@ export interface Deps {
   runner?: AgentRunner;
   logDir?: string;
   out?: (s: string) => void;
+  now?: () => Date;
   cwd?: string;
 }
 
@@ -308,6 +315,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
           reason: flag(a, 'reason'),
           note: note(a, deps.cwd),
           pr: pr ? id(pr, '--pr') : undefined,
+          sha: flag(a, 'sha'),
         }),
       );
       return 0;
@@ -337,6 +345,27 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       const file = rest[1];
       if (!file) throw new UsageError('evidence <id> <file>');
       out(await factory.evidence(id(rest[0]), role(a), basename(file), readFileSync(resolve(deps.cwd ?? process.cwd(), file))));
+      return 0;
+    }
+
+    case 'report': {
+      // A local calendar day (default today), or the last N days with --days.
+      const days = flag(a, 'days');
+      const date = flag(a, 'date');
+      let from: Date;
+      let to: Date;
+      if (days) {
+        to = deps.now?.() ?? new Date();
+        from = new Date(to.getTime() - Number(days) * 86400000);
+      } else {
+        const d = date ? new Date(`${date}T00:00:00`) : (deps.now?.() ?? new Date());
+        if (Number.isNaN(d.getTime())) throw new UsageError(`--date must be YYYY-MM-DD`);
+        from = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
+      }
+      const { events, runs } = loadLogs(deps.logDir ?? logDir(repo()));
+      const r = reviewerReport(events, runs, from, to);
+      out(json ? JSON.stringify(r, null, 2) : formatReport(r));
       return 0;
     }
 
@@ -376,7 +405,7 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
         else {
           if (dryRun) {
             const n = r.next;
-            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
+            out(!n ? 'Nothing can move.' : n.kind === 'mark-done' ? `Next: mark #${n.ticket} done (PR merged)` : n.kind === 're-review' ? `Next: send #${n.ticket} back to review (PR changed after its review)` : `Next: factory-${n.agent} on #${n.ticket} (${n.rule}): "${n.prompt}"`);
           } else {
             out(`\n${r.runs.length} agent run(s); stopped: ${r.stoppedBy}`);
             if (r.markedDone.length) out(`Done: ${r.markedDone.map((n) => `#${n}`).join(', ')}`);
@@ -397,6 +426,15 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  // The hook entry point: no repo or config needed, and it must answer fast.
+  if (argv[0] === 'guard') {
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const r = runGuard(input, process.env.FACTORY_ROLE);
+    if (r.message) console.error(r.message);
+    process.exitCode = r.code;
+    return;
+  }
   try {
     process.exitCode = await run(argv);
   } catch (e) {

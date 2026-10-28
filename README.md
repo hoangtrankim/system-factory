@@ -37,7 +37,7 @@ Design doc: https://claude.ai/artifact/Kqw238YaXngzZFgXsEv4fn
 4. **Blind tests.** The QA writer reads only the spec and the design note's public interface (`forge interface N`), never the code. It writes acceptance tests under `tests/acceptance/`, pushes them to branch `ticket-N`, and marks the ticket `tests-ready`. The builder can never change these tests.
 5. **Build.** In its own worktree on top of those tests, the builder makes them pass and adds its own tests. It opens the PR with `forge pr`. If an acceptance test is wrong, it sends the ticket back to the QA writer (`flawed-test`) rather than working around it.
 6. **Security gate** (risky tickets only). A read-only security reviewer passes or fails the PR. A fail sends it back and costs a round. It also writes a risk note for the owner's weekly digest.
-7. **Review.** A read-only reviewer checks the PR against the spec, the design note, the ticket's components and the acceptance-test commits, and runs the tests. Blocking findings send the ticket back with a typed reason. Minor ones become **Follow-ups**.
+7. **Review.** A read-only reviewer checks the PR against the spec, the design note, the ticket's components and the acceptance-test commits, a fixed list of quality rules, and runs the tests. Blocking findings send the ticket back with a typed reason. Minor ones become **Follow-ups**. A pass covers one commit only (see [the review gate](#the-review-gate)).
 8. **QA.** The QA reporter reads CI on the PR's head commit and posts per-test evidence on the ticket. Red CI sends the ticket back.
 9. **Merge.** The owner merges the PR (the merge queue takes over in phase 3). The dispatcher then marks the ticket done, which unblocks the next one.
 10. **Close.** When every ticket is done, the planner files the real follow-ups as new tickets, or closes the spec.
@@ -96,12 +96,18 @@ The dispatcher runs one agent at a time and posts "Started `factory-<role>`" on 
 | `--max-runs N` | stop after N agent runs (default 25; ignored with `--watch`) |
 | `--watch [--interval S]` | never stop; when idle, check again every S seconds (default 300) for merges and new specs |
 
+### The guard hook
+
+The reviewer and the security reviewer keep `Bash` so they can run `forge`, git and the tests, but the dispatcher runs them with a Claude Code `PreToolUse` hook, `forge guard` (`src/guard.ts`). It checks every command before it runs and blocks anything outside a read-only list: no `git push`, `commit`, `checkout` or `reset`, no `forge --as` another role, no writes outside `/tmp/factory`, `npm` only inside a throwaway worktree under `/tmp/factory`, `curl` only to localhost, and no `$( )`, backticks or `&`. A blocked command is refused with the reason, and unreadable input is refused too. The runner passes the hook with `--settings` and sets `FACTORY_ROLE`, so the target repo's own settings are untouched. Other roles are not guarded yet.
+
 ### Logs
 
 Logs record facts, not transcripts. They go to `~/.factory/logs/<owner>/<repo>/`, or `FACTORY_LOG_DIR` if set, and the phase 5 retro will read them:
 
 - `events.jsonl` has every ticket change made through the CLI, including the agents' own: moves, gates, notes, rounds, escalations.
 - `runs.jsonl` has one line per agent run: ticket, agent, rule, exit code, duration, cost, turns, session id, whether it changed anything, and its one-line summary.
+
+`forge report` turns them into the end-of-day **reviewer report**: reviews, pass rate, send-backs by reason, re-reviews after a push, tickets done and their rounds, reviewer run time and cost, and **escapes**, meaning PRs the reviewer passed that QA or the owner sent back later. Escapes only count mistakes someone found; a planted-bug benchmark comes with the retro agent. To get it every evening on the runner machine, add a cron line such as `55 23 * * * cd ~/todo-app && forge report > ~/.factory/reports/$(date +\%F).md`.
 
 ## Agents
 
@@ -142,7 +148,8 @@ side states: blocked, needs-human
 | planned → designed | designer | |
 | designed → building | builder | blind QA tests are marked ready, every `Blocked by` ticket is done |
 | building → in-review | builder | a PR is given |
-| in-review → in-qa | reviewer | a `risky` ticket has passed the security gate |
+| in-review → in-qa | reviewer | a `risky` ticket has passed the security gate; `--sha` is the PR's current head commit |
+| in-qa → in-review | system (the dispatcher) | the PR has commits the reviewer did not pass; no round is spent |
 | in-qa → done | system (the dispatcher) | the PR is linked; the dispatcher only does this once it is merged |
 | in-review → building | reviewer, security | a send-back reason; round + 1 |
 | in-qa → building | qa-reporter, system | a send-back reason; round + 1 |
@@ -151,7 +158,11 @@ side states: blocked, needs-human
 | any → needs-human | any agent, owner, system | a reason |
 | blocked / needs-human → planned | planner, owner | |
 
-The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `unmarked-risk`, `flawed-test`.
+The send-back that reaches `maxRounds` (default 3) goes to `needs-human` instead. Send-back reasons: `spec-gap`, `wrong-behavior`, `missing-test`, `failing-check`, `scope-creep`, `design`, `quality`, `unmarked-risk`, `flawed-test`.
+
+### The review gate
+
+A review covers one commit. Passing a review (`forge move N in-qa --as reviewer --sha <sha>`) is refused unless `<sha>` is the PR's head right now. On success the CLI records `Reviewed: <sha>` on the ticket and sets a commit status, `factory/review`, to success on that commit. Commit statuses belong to one commit, so any later push starts without one. Make `factory/review` a required status check in the target repo's branch protection, and only reviewed code can merge. The dispatcher also sends an `in-qa` ticket whose PR head is not the reviewed commit back to `in-review`, so the new commits get reviewed, without costing a round.
 
 Only the grill or owner file specs. Only the planner or owner file tickets, edit them before building and close specs. Only the qa-writer marks tests ready, and only the builder opens a ticket's PR, from branch `ticket-N`.
 
@@ -167,6 +178,7 @@ Only the grill or owner file specs. Only the planner or owner file tickets, edit
 | Components | `component:<name>` |
 | Gate results | `gate:security:pass` or `:fail`, cleared on every send-back |
 | Links | body lines `Spec: #1`, `Covers: AC-1, AC-2`, `Blocked by: #3`, `PR: #12` |
+| Reviewed commit | body line `Reviewed: <sha>`, cleared on any move after the pass |
 | Design note, reviews, evidence | comments on the ticket, each starting with the role that wrote it |
 
 All ticket access goes through the `Tracker` interface in `src/tracker/tracker.ts`, so a Jira adapter can replace GitHub Issues later. PRs and CI go through `CodeHost` in `src/codehost.ts`. Every GitHub call uses the REST API (`gh api`), never GraphQL, so it also works on networks that block GraphQL.
@@ -186,12 +198,13 @@ forge spec-status S                        # criteria, uncovered, open tickets
 forge create --as grill --type spec --title T --body-file F
 forge create --as planner --spec S --title T --covers AC-1,AC-2 --component ui [--blocked-by 2] [--priority p1] [--risky]
 forge edit N --as planner [--risky | --not-risky] [--component C] [--covers ...] [--blocked-by ...]
-forge move N <state> --as R [--reason R] [--note-file F] [--pr P]
+forge move N <state> --as R [--reason R] [--note-file F] [--pr P] [--sha SHA]   # a reviewer pass needs --sha
 forge tests-ready N --as qa-writer --note-file F
 forge gate N security pass|fail --as security [--reason R] --note-file F
 forge note N --as R --note-file F
 forge evidence N <file> --as qa-reporter   # upload, print the link
 forge close-spec S --as planner
+forge report [--date YYYY-MM-DD | --days N]   # reviewer report from the logs (default: today)
 
 forge interface N                          # the design note's Public interface only
 forge pr N --as builder --body-file F      # open or find the PR for branch ticket-N

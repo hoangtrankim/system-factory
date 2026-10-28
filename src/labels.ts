@@ -106,11 +106,13 @@ export function fromLabels(labels: string[]): LabelFields {
 }
 
 // Body lines: "Spec: #3", "Blocked by: #1, #2", "Covers: AC-1, AC-2", "PR: #12".
-const LINE_KEYS = { spec: 'Spec', blockedBy: 'Blocked by', covers: 'Covers', pr: 'PR' } as const;
+// "Reviewed: <sha>" is the PR commit the reviewer passed.
+const LINE_KEYS = { spec: 'Spec', blockedBy: 'Blocked by', covers: 'Covers', pr: 'PR', reviewedSha: 'Reviewed' } as const;
 
 export interface BodyFields {
   spec?: number;
   pr?: number;
+  reviewedSha?: string;
   blockedBy: number[];
   covers: string[];
 }
@@ -126,6 +128,7 @@ export function fromBody(body: string): BodyFields {
   return {
     spec: issueNumbers(lineValue(body, LINE_KEYS.spec))[0],
     pr: issueNumbers(lineValue(body, LINE_KEYS.pr))[0],
+    reviewedSha: /^[0-9a-f]{40}$/.exec(lineValue(body, LINE_KEYS.reviewedSha) ?? '')?.[0],
     blockedBy: issueNumbers(lineValue(body, LINE_KEYS.blockedBy)),
     covers: [...(lineValue(body, LINE_KEYS.covers) ?? '').matchAll(/AC-\d+/g)].map((m) => m[0]),
   };
@@ -146,5 +149,6 @@ export function withBodyFields(body: string, f: BodyFields): string {
   out = setLine(out, LINE_KEYS.covers, f.covers.length ? f.covers.join(', ') : undefined);
   out = setLine(out, LINE_KEYS.blockedBy, f.blockedBy.length ? f.blockedBy.map((n) => `#${n}`).join(', ') : undefined);
   out = setLine(out, LINE_KEYS.pr, f.pr ? `#${f.pr}` : undefined);
+  out = setLine(out, LINE_KEYS.reviewedSha, f.reviewedSha);
   return out;
 }

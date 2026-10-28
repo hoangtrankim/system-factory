@@ -2,6 +2,17 @@
 // number as its prompt. The agent's own file in .claude/agents/ sets its tools and model.
 
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { GUARDED_ROLES } from './guard.js';
+import { PACKAGE_ROOT } from './init.js';
+import type { Role } from './lifecycle.js';
+
+// Claude Code settings for a read-only agent's run: every Bash call goes through `forge guard`
+// first, which blocks anything that is not on that role's read-only list.
+export function guardSettings(cli = join(PACKAGE_ROOT, 'dist', 'cli.js')): string {
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} guard`;
+  return JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] } });
+}
 
 export interface RunRequest {
   agent: string; // e.g. factory-builder
@@ -37,10 +48,13 @@ export class ClaudeRunner implements AgentRunner {
 
   run(req: RunRequest): Promise<RunResult> {
     // The prompt goes on stdin: a variadic flag such as --allowedTools would swallow it as an argument.
-    const args = ['-p', '--agent', req.agent, '--output-format', 'json', ...this.extraArgs];
+    const role = req.agent.replace(/^factory-/, '') as Role;
+    const guarded = GUARDED_ROLES.includes(role);
+    const args = ['-p', '--agent', req.agent, '--output-format', 'json', ...(guarded ? ['--settings', guardSettings()] : []), ...this.extraArgs];
     const started = Date.now();
     return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { cwd: req.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      const env = { ...process.env, FACTORY_ROLE: role };
+      const child = spawn(this.bin, args, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.end(req.prompt);
       let stdout = '';
       let stderr = '';

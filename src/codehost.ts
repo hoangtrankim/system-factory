@@ -27,6 +27,8 @@ export interface CodeHost {
   getPr(number: number): Promise<PullRequest>;
   diff(number: number): Promise<string>;
   checks(number: number): Promise<Check[]>;
+  // A commit status. Statuses belong to one commit, so a new push starts without them.
+  setStatus(sha: string, context: string, state: 'success' | 'failure' | 'pending', description: string): Promise<void>;
 }
 
 interface GhPull {
@@ -84,5 +86,9 @@ export class GitHubCodeHost implements CodeHost {
       const run = /\/actions\/runs\/(\d+)/.exec(c.html_url)?.[1];
       return { name: c.name, status: c.status, conclusion: c.conclusion, url: c.html_url, ...(run ? { runId: Number(run) } : {}) };
     });
+  }
+
+  async setStatus(sha: string, context: string, state: 'success' | 'failure' | 'pending', description: string): Promise<void> {
+    await this.gh({ method: 'POST', path: this.path(`statuses/${sha}`), body: { state, context, description } });
   }
 }

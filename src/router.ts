@@ -23,7 +23,8 @@ export interface Snapshot {
 
 export type Step =
   | { kind: 'agent'; agent: AgentRole; ticket: number; prompt: string; rule: string }
-  | { kind: 'mark-done'; ticket: number; rule: string };
+  | { kind: 'mark-done'; ticket: number; rule: string }
+  | { kind: 're-review'; ticket: number; rule: string };
 
 interface Rule {
   name: string;
@@ -41,6 +42,7 @@ const agent = (role: AgentRole, prompt: (t: Ticket) => string, rule: string) => 
 
 const ticketPrompt = (t: Ticket) => `Ticket ${t.id}${t.spec ? ` (spec ${t.spec})` : ''}. Follow your prompt.`;
 const build = (t: Ticket) => t.type === 'build' && !t.closed;
+const reviewedHead = (t: Ticket, s: Snapshot) => !!t.reviewedSha && s.prs.get(t.id)?.headSha === t.reviewedSha;
 
 // Checked in order; the first rule with a matching ticket wins. Finishing work comes before
 // starting new work, so a ticket in review is never starved by fresh designs.
@@ -51,10 +53,16 @@ export const ROUTES: readonly Rule[] = [
     step: (t) => ({ kind: 'mark-done', ticket: t.id, rule: 'merged-pr' }),
   },
   {
+    // New commits after the review: they are unreviewed, so the ticket goes back to review.
+    name: 'pushed-after-review',
+    match: (t, s) => build(t) && t.state === 'in-qa' && !reviewedHead(t, s) && !s.prs.get(t.id)?.merged && s.prs.has(t.id),
+    step: (t) => ({ kind: 're-review', ticket: t.id, rule: 'pushed-after-review' }),
+  },
+  {
     name: 'qa-report',
     match: (t, s) => {
       const pr = s.prs.get(t.id);
-      return build(t) && t.state === 'in-qa' && !!pr && pr.checksDone && !s.reported.get(t.id)?.has(pr.headSha);
+      return build(t) && t.state === 'in-qa' && !!pr && reviewedHead(t, s) && pr.checksDone && !s.reported.get(t.id)?.has(pr.headSha);
     },
     step: agent('qa-reporter', ticketPrompt, 'qa-report'),
   },
@@ -128,7 +136,7 @@ export function waitingOnOwner(s: Snapshot): { toMerge: number[]; needsHuman: nu
     toMerge: open
       .filter((t) => {
         const pr = s.prs.get(t.id);
-        return t.state === 'in-qa' && !!pr && !pr.merged && pr.checksDone && !!s.reported.get(t.id)?.has(pr.headSha);
+        return t.state === 'in-qa' && !!pr && !pr.merged && reviewedHead(t, s) && pr.checksDone && !!s.reported.get(t.id)?.has(pr.headSha);
       })
       .map((t) => t.id),
     needsHuman: open.filter((t) => t.state === 'needs-human' || t.state === 'blocked').map((t) => t.id),
