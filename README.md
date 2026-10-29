@@ -148,7 +148,11 @@ Each role is a Claude Code subagent in `agents/`, and the Grill is a skill in `s
 
 Read-only agents still have `Bash`, so they can run `forge`, `git` and tests. The prompts forbid writes. Guard hooks that block writes mechanically come later.
 
-The contract test in `src/agents.test.ts` keeps the prompts honest. It checks that each agent acts only as its own role, names only real states and send-back reasons, never uses GraphQL `gh` commands, and keeps the flawed-test path.
+### Patterns catalog
+
+Each app repository can keep a short catalog of its house design patterns in `docs/patterns.md`: what each pattern is, where it lives, and when to use it. The designer names the patterns a ticket uses in a **Patterns** section of its design note. The designer never edits the repository, so when a ticket needs a new pattern or a change to one, it writes the full entry in the note and the builder adds it to the catalog in the ticket's PR. The builder follows the named patterns, and the reviewer sends a PR back as `design` when it ignores or bypasses them, or as `scope-creep` when it edits the catalog without the note asking. Write the first version by hand from the code the repository already has.
+
+The contract test in `src/agents.test.ts` keeps the prompts honest. It checks that each agent acts only as its own role, names only real states and send-back reasons, never uses GraphQL `gh` commands, keeps the flawed-test path, and wires the patterns catalog through the designer, builder and reviewer.
 
 ## Ticket lifecycle
 

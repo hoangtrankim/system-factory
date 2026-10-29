@@ -93,6 +93,13 @@ describe('agent prompts', () => {
     }
   });
 
+  it('passes the patterns catalog from the design note to the builder and reviewer', () => {
+    const body = (r: string) => agents.find((a) => role(a) === r)!.body;
+    expect(body('designer')).toContain('### Patterns');
+    for (const r of ['designer', 'builder', 'reviewer']) expect(body(r)).toContain('docs/patterns.md');
+    expect(body('builder')).toContain('**New pattern**');
+  });
+
   it('forbids the builder from touching acceptance tests', () => {
     const b = agents.find((a) => role(a) === 'builder')!;
     expect(b.body).toContain('Never edit, skip, delete or weaken anything under `tests/acceptance/`');
